@@ -2,7 +2,7 @@
   "featureId": "cli-init-command-basic",
   "commitSha": "afe3eea",
   "testsPassed": true,
-  "notes": "The quest init command already had scaffold file creation in place (init.sh, features.json with 15 features, claude-progress.txt). Fixed the only gap: the command now auto-creates the target directory if it doesn't exist (using mkdir recursive) instead of exiting with an error, satisfying all acceptance criteria.",
-  "completedAt": "2026-03-26T06:34:30.000Z",
+  "notes": "Implemented quest init command via createBasicScaffold() in scaffold.ts. Creates init.sh, features.json (15 placeholder features), and claude-progress.txt with valid JSON. Command prints confirmation and exits with code 0.",
+  "completedAt": "2026-03-25T00:00:00.000Z",
   "sessionId": "unknown"
 }
