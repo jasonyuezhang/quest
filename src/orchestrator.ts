@@ -417,8 +417,21 @@ export class Orchestrator {
           console.log(chalk.green('\n✅ All features implemented!'))
           const total = featuresData.features.length
           const costSummary = computeRunCost(readEvents(projectDir))
-          emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
-          await this.pluginManager.onRunComplete({ projectDir, passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd })
+          const runDoneMs = Date.now() - runStart
+          const runPassing = countPassing(featuresData.features)
+          emit({ type: 'run_complete', passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+          await this.pluginManager.onRunComplete({ projectDir, passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd })
+          {
+            const runCompletePayload: RunCompletePayload = {
+              event: 'run_complete',
+              passing: runPassing,
+              total,
+              durationMs: runDoneMs,
+              totalCostUsd: costSummary.totalCostUsd,
+              summary: `${runPassing}/${total} features passing`,
+            }
+            await notifyRunComplete(runCompletePayload, this.opts.webhookUrl, this.opts.notify)
+          }
           break
         }
 
@@ -528,7 +541,16 @@ export class Orchestrator {
     if (pending.length === 0) {
       console.log(chalk.green('\n✅ All features already implemented!'))
       const earlyExitCost = computeRunCost(readEvents(projectDir))
-      emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd, costByAgent: earlyExitCost.byAgent })
+      const earlyPassing = countPassing(featuresData.features)
+      emit({ type: 'run_complete', passing: earlyPassing, total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd, costByAgent: earlyExitCost.byAgent })
+      await notifyRunComplete({
+        event: 'run_complete',
+        passing: earlyPassing,
+        total,
+        durationMs: 0,
+        totalCostUsd: earlyExitCost.totalCostUsd,
+        summary: `${earlyPassing}/${total} features passing`,
+      }, this.opts.webhookUrl, this.opts.notify)
       return
     }
 
@@ -683,6 +705,18 @@ export class Orchestrator {
         }
 
         emit({ type: 'feature_done', featureId, verdict: wr.verdict, attempt: 1, durationMs: wr.durationMs, failureCategory: wr.failureCategory, workerId: wr.workerId })
+        {
+          const featureCost = computeFeatureCost(readEvents(projectDir), featureId)
+          const fdPayload: FeatureDonePayload = {
+            event: 'feature_done',
+            featureId,
+            verdict: wr.verdict,
+            durationMs: wr.durationMs,
+            costEstimateUsd: featureCost,
+            errorSummary: wr.failureCategory ?? wr.error ?? (wr.verdict === 'fail' ? 'Feature failed' : undefined),
+          }
+          await notifyFeatureDone(fdPayload, this.opts.webhookUrl, this.opts.notify)
+        }
 
         // Release worktree back to pool
         workerPool.release(worktree)
@@ -699,6 +733,18 @@ export class Orchestrator {
           failed++
         }
         emit({ type: 'feature_done', featureId: feature.id, verdict, attempt: 1, durationMs: 0, failureCategory })
+        {
+          const featureCost = computeFeatureCost(readEvents(projectDir), feature.id)
+          const fdRetryPayload: FeatureDonePayload = {
+            event: 'feature_done',
+            featureId: feature.id,
+            verdict,
+            durationMs: 0,
+            costEstimateUsd: featureCost,
+            errorSummary: failureCategory ?? (verdict === 'fail' ? 'Feature failed' : undefined),
+          }
+          await notifyFeatureDone(fdRetryPayload, this.opts.webhookUrl, this.opts.notify)
+        }
       }
     } finally {
       // Always clean up worktrees
@@ -716,7 +762,16 @@ export class Orchestrator {
       chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing (${elapsed}s)`),
     )
     const costSummary = computeRunCost(readEvents(projectDir))
-    emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+    const dagRunDoneMs = Date.now() - runStart
+    emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: dagRunDoneMs, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+    await notifyRunComplete({
+      event: 'run_complete',
+      passing: summary.passing,
+      total: summary.total,
+      durationMs: dagRunDoneMs,
+      totalCostUsd: costSummary.totalCostUsd,
+      summary: `${summary.passing}/${summary.total} features passing`,
+    }, this.opts.webhookUrl, this.opts.notify)
   }
 
   /**

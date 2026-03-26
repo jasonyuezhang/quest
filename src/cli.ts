@@ -198,7 +198,9 @@ program
   .option('--no-evidence', 'Disable evidence capture (screenshots, console/network errors) to speed up evaluation', false)
   .option('--coder-model <model>', 'Model to use for the coder agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
   .option('--evaluator-model <model>', 'Model to use for the evaluator agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string }) => {
+  .option('--webhook <url>', 'Send POST notifications on feature_done and run_complete events to this URL')
+  .option('--notify <channel>', 'Send formatted notifications to a channel (currently: slack). Slack URL read from QUEST_SLACK_WEBHOOK env var')
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     // Validate models if provided
@@ -240,6 +242,8 @@ program
       noEvidence: !opts.evidence,
       coderModel: opts.coderModel,
       evaluatorModel: opts.evaluatorModel,
+      webhookUrl: opts.webhook,
+      notify: opts.notify,
     })
 
     try {
