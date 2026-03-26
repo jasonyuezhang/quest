@@ -2,7 +2,7 @@
   "featureId": "cli-init-command-basic",
   "commitSha": "7589f10",
   "testsPassed": true,
-  "notes": "Implemented `quest init <dir>` command that creates init.sh, features.json (with 15 scaffold features), and claude-progress.txt with valid JSON. Command exits with code 0 and prints a confirmation message on success.",
-  "completedAt": "2026-03-26T08:26:00.000Z",
+  "notes": "The quest init <dir> command creates init.sh, features.json (with 15 features, exceeding the 10 minimum), and claude-progress.txt with valid JSON. Command exits 0 and prints confirmation to stdout. All 5 acceptance criteria satisfied.",
+  "completedAt": "2026-03-26T08:29:00.000Z",
   "sessionId": "unknown"
 }
