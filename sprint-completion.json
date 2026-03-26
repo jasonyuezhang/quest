@@ -1,8 +1,0 @@
-{
-  "featureId": "failure-classification-7",
-  "commitSha": "6c1f03d",
-  "testsPassed": true,
-  "notes": "Implemented failure classification with 6 categories (timeout, tool_error, logic_bug, external_dep, context_exhaustion, unknown). Added classifyFailure() in src/failure-classifier.ts, updated events.ts/types.ts/orchestrator/cli to include failureCategory in feature_done events and eval-report.json, added retry strategy logic and quest status --failures table, plus 35 unit tests. Fixed orchestrator test regressions from return type change.",
-  "completedAt": "2026-03-26T21:00:00.000Z",
-  "sessionId": "unknown"
-}
