@@ -1,8 +1,8 @@
 {
   "featureId": "cli-init-command-basic",
-  "commitSha": "f575d90",
+  "commitSha": "09189a7",
   "testsPassed": true,
   "notes": "The quest init <dir> command creates init.sh (executable), features.json (with 15 features >= 10 required), and claude-progress.txt (valid JSON) in the target directory, prints a confirmation message to stdout, and exits with code 0. All 5 acceptance criteria verified passing via end-to-end test.",
-  "completedAt": "2026-03-26T07:35:30.000Z",
-  "sessionId": "context-reset-final"
+  "completedAt": "2026-03-26T07:40:00.000Z",
+  "sessionId": "context-reset-1"
 }
