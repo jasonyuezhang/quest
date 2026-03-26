@@ -1,8 +1,8 @@
 {
   "featureId": "cli-init-command-basic",
-  "commitSha": "abcc006",
+  "commitSha": "7e886f2",
   "testsPassed": true,
-  "notes": "The quest init command was already implemented in a previous session (commit abcc006). It creates init.sh, features.json (with 15 features), and claude-progress.txt (valid JSON) in the target directory, prints a confirmation message, and exits with code 0.",
-  "completedAt": "2026-03-26T08:57:50.000Z",
+  "notes": "The quest init command was implemented in commit 7e886f2. It creates init.sh (executable), features.json (with 15 features >= 10 required), and claude-progress.txt (valid JSON) in the target directory, prints a confirmation message to stdout, and exits with code 0 on success.",
+  "completedAt": "2026-03-26T09:00:00.000Z",
   "sessionId": "unknown"
 }
