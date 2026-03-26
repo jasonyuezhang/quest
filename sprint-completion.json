@@ -1,8 +1,8 @@
 {
   "featureId": "cli-init-command-basic",
-  "commitSha": "48d0052",
+  "commitSha": "2389833",
   "testsPassed": true,
-  "notes": "The quest init command was already fully implemented: createBasicScaffold() writes init.sh (executable), features.json (15 placeholder features), and claude-progress.txt (valid JSON). CLI exits with code 0 and prints a confirmation message to stdout.",
-  "completedAt": "2026-03-26T08:00:00.000Z",
+  "notes": "The quest init command is fully implemented via createBasicScaffold(): writes init.sh (executable), features.json (15 placeholder features ≥10 required), and claude-progress.txt (valid JSON). CLI exits with code 0 and prints a confirmation message to stdout.",
+  "completedAt": "2026-03-26T08:05:00.000Z",
   "sessionId": "unknown"
 }
