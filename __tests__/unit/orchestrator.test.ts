@@ -162,7 +162,7 @@ describe('orchestrator.ts', () => {
       })
 
       const orch = new Orchestrator({ projectDir: dir })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('pass')
     })
 
@@ -174,7 +174,7 @@ describe('orchestrator.ts', () => {
       })
 
       const orch = new Orchestrator({ projectDir: dir, retryLimit: 0 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('fail')
     })
 
@@ -190,7 +190,7 @@ describe('orchestrator.ts', () => {
       })
 
       const orch = new Orchestrator({ projectDir: dir, retryLimit: 2 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('pass')
       expect(callCount).toBe(2)
     })
@@ -220,10 +220,10 @@ describe('orchestrator.ts', () => {
     })
 
     it('returns "fail" when coder fails', async () => {
-      mockCoderAgent.mockResolvedValue(makeAgentResult({ success: false, error: 'coder crashed' }))
+      mockCoderAgent.mockRejectedValue(new Error('coder crashed'))
 
       const orch = new Orchestrator({ projectDir: dir, retryLimit: 0 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('fail')
       expect(mockEvalAgent).not.toHaveBeenCalled()
     })
@@ -234,7 +234,7 @@ describe('orchestrator.ts', () => {
       // Don't write eval-report.json
 
       const orch = new Orchestrator({ projectDir: dir, retryLimit: 0 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('fail')
     })
 
@@ -287,7 +287,7 @@ describe('orchestrator.ts', () => {
         return makeAgentResult()
       })
 
-      const orch = new Orchestrator({ projectDir: dir, maxFeatures: 1 })
+      const orch = new Orchestrator({ projectDir: dir, maxFeatures: 1, maxConcurrency: 1 })
       await orch.run()
       expect(mockCoderAgent).toHaveBeenCalledTimes(1)
     })
@@ -304,7 +304,7 @@ describe('orchestrator.ts', () => {
         return makeAgentResult()
       })
 
-      const orch = new Orchestrator({ projectDir: dir2, maxFeatures: 1 })
+      const orch = new Orchestrator({ projectDir: dir2, maxFeatures: 1, maxConcurrency: 1 })
       await orch.run()
       expect(mockCoderAgent).toHaveBeenCalledTimes(1)
       await cleanTempDir(dir2)
@@ -334,7 +334,7 @@ describe('orchestrator.ts', () => {
         return makeAgentResult()
       })
 
-      const orch = new Orchestrator({ projectDir: dir, maxFeatures: 1 })
+      const orch = new Orchestrator({ projectDir: dir, maxFeatures: 1, maxConcurrency: 1 })
       await expect(orch.resume()).resolves.not.toThrow()
     })
 
@@ -362,7 +362,7 @@ describe('orchestrator.ts', () => {
       })
 
       const orch = new Orchestrator({ projectDir: dir, maxContextResets: 2 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(coderCallCount).toBeGreaterThan(1)
       expect(verdict).toBe('pass')
     })
@@ -371,7 +371,7 @@ describe('orchestrator.ts', () => {
       mockCoderAgent.mockRejectedValue(new ContextResetNeededError('always reset'))
 
       const orch = new Orchestrator({ projectDir: dir, maxContextResets: 1, retryLimit: 0 })
-      const verdict = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(verdict).toBe('fail')
     })
   })
