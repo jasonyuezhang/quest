@@ -28,6 +28,7 @@ export type QuestEvent =
   | { ts: string; type: 'batch_plan'; ready: number; dispatching: number; inFlight: number; reason: string }
   | { ts: string; type: 'feature_unblocked'; featureId: string; unblockedBy: string }
   | { ts: string; type: 'run_complete'; passing: number; total: number; durationMs: number }
+  | { ts: string; type: 'init_failed'; attempt: number; exitCode: number | null; stderr: string }
 
 const EVENT_LOG_FILE = 'quest-events.jsonl'
 

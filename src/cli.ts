@@ -189,7 +189,9 @@ program
   .option('--max-context <tokens>', 'Maximum context window tokens for dynamic budgeting (default: 200000)', (v) => parseInt(v, 10), 200_000)
   .option('--dry-run', 'Print plan without running agents', false)
   .option('--review', 'Run code review between coder and evaluator (checks security, error handling, duplication, naming, style)', false)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean }) => {
+  .option('--skip-init', 'Skip running init.sh (for environments where setup is manual)', false)
+  .option('--health-timeout <seconds>', 'Timeout in seconds for health check polling after init.sh (default: 30)', (v) => parseInt(v, 10), 30)
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     // Auto-init if project has no features.json
@@ -210,6 +212,8 @@ program
       maxContextTokens: opts.maxContext,
       dryRun: opts.dryRun,
       review: opts.review,
+      skipInit: opts.skipInit,
+      healthTimeout: opts.healthTimeout,
     })
 
     try {

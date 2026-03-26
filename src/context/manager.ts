@@ -1,14 +1,35 @@
 import type { Feature, ContextHandoff } from '../agents/types.js'
 import { writeContextHandoff } from '../sprint/contracts.js'
+import { emit } from '../events.js'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ModelUsage } from '@anthropic-ai/claude-agent-sdk'
 
 const execAsync = promisify(exec)
 
-const CONTEXT_WINDOW_TOKENS = 200_000
-/** Trigger context reset at 75% of the context window */
-const RESET_THRESHOLD = Math.floor(CONTEXT_WINDOW_TOKENS * 0.75) // 150,000
+const DEFAULT_MAX_CONTEXT_TOKENS = 200_000
+const WARNING_THRESHOLD_PCT = 0.60
+
+export interface ContextManagerOptions {
+  /** Maximum context window tokens (default: 200000) */
+  maxContextTokens?: number
+  /** Feature ID for event labeling */
+  featureId?: string
+  /** Worker ID for parallel mode */
+  workerId?: number
+}
+
+/**
+ * Calculate the reset threshold percentage based on feature complexity.
+ * - Simple features (<=3 criteria): 85%
+ * - Complex features (>5 criteria): 65%
+ * - Medium features (4-5 criteria): 75%
+ */
+export function calculateResetThresholdPct(criteriaCount: number): number {
+  if (criteriaCount <= 3) return 0.85
+  if (criteriaCount > 5) return 0.65
+  return 0.75
+}
 
 async function gitExec(cmd: string, cwd: string): Promise<string> {
   try {
@@ -20,40 +41,88 @@ async function gitExec(cmd: string, cwd: string): Promise<string> {
 }
 
 export class ContextManager {
+  private maxContextTokens: number
+  private featureId: string | undefined
+  private workerId: number | undefined
   private totalInputTokens = 0
   private totalOutputTokens = 0
+  private totalCacheReadTokens = 0
   private peakContextTokens = 0
   private resetCount = 0
+  private warningEmitted = false
+  private criteriaCount = 0
+
+  constructor(opts: ContextManagerOptions = {}) {
+    this.maxContextTokens = opts.maxContextTokens ?? DEFAULT_MAX_CONTEXT_TOKENS
+    this.featureId = opts.featureId
+    this.workerId = opts.workerId
+  }
+
+  /**
+   * Set the feature complexity so the reset threshold is calculated dynamically.
+   * Call this before recording any usage for accurate thresholding.
+   */
+  setFeatureComplexity(criteriaCount: number): void {
+    this.criteriaCount = criteriaCount
+  }
+
+  /**
+   * Returns the reset threshold in tokens based on feature complexity.
+   */
+  getResetThreshold(): number {
+    const pct = calculateResetThresholdPct(this.criteriaCount)
+    return Math.floor(this.maxContextTokens * pct)
+  }
 
   /**
    * Record token usage from an SDK result message's modelUsage.
    * Usage is available on result messages (type === 'result') not assistant messages.
    * Uses ModelUsage.contextWindow for accurate context fill tracking.
+   *
+   * Emits a context_warning event at 60% usage as an early signal.
    */
   recordUsage(usage: ModelUsage): void {
     this.totalInputTokens += usage.inputTokens
     this.totalOutputTokens += usage.outputTokens
+    this.totalCacheReadTokens += usage.cacheReadInputTokens
     // contextWindow tracks actual context fill — more accurate than inputTokens alone
     if (usage.contextWindow > this.peakContextTokens) {
       this.peakContextTokens = usage.contextWindow
+    }
+
+    // Emit early warning at 60% context usage
+    const warningThreshold = Math.floor(this.maxContextTokens * WARNING_THRESHOLD_PCT)
+    if (!this.warningEmitted && this.peakContextTokens >= warningThreshold) {
+      this.warningEmitted = true
+      const usagePct = Math.round((this.peakContextTokens / this.maxContextTokens) * 100)
+      emit({
+        type: 'context_warning',
+        featureId: this.featureId,
+        usagePct,
+        contextTokens: this.peakContextTokens,
+        workerId: this.workerId,
+      })
     }
   }
 
   /**
    * Returns true when input tokens are approaching the context window limit.
+   * Threshold is dynamic based on feature complexity (set via setFeatureComplexity).
    * At this point, the orchestrator should end the session and start a fresh one
    * with a structured handoff — NOT use SDK session resumption (which reattaches
    * to the same full context window).
    */
   shouldReset(): boolean {
-    return this.peakContextTokens >= RESET_THRESHOLD
+    return this.peakContextTokens >= this.getResetThreshold()
   }
 
   /** Reset token counters for a new session */
   resetForNewSession(): void {
     this.totalInputTokens = 0
     this.totalOutputTokens = 0
+    this.totalCacheReadTokens = 0
     this.peakContextTokens = 0
+    this.warningEmitted = false
     this.resetCount++
   }
 
@@ -71,7 +140,7 @@ export class ContextManager {
     startingSha?: string,
   ): Promise<string> {
     const remainingCriteria = feature.acceptanceCriteria.filter(
-      c => !completedSteps.some(s => s.toLowerCase().includes(c.toLowerCase().slice(0, 20))),
+      c => !completedSteps.some(s => c.toLowerCase().includes(s.toLowerCase().slice(0, 20))),
     )
 
     // Get files changed since the feature started (both committed and uncommitted)
@@ -158,6 +227,7 @@ export class ContextManager {
   getStats(): {
     totalInput: number
     totalOutput: number
+    cacheReadTokens: number
     peakContext: number
     resetThreshold: number
     resetCount: number
@@ -165,8 +235,9 @@ export class ContextManager {
     return {
       totalInput: this.totalInputTokens,
       totalOutput: this.totalOutputTokens,
+      cacheReadTokens: this.totalCacheReadTokens,
       peakContext: this.peakContextTokens,
-      resetThreshold: RESET_THRESHOLD,
+      resetThreshold: this.getResetThreshold(),
       resetCount: this.resetCount,
     }
   }
