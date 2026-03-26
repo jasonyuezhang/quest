@@ -307,7 +307,7 @@ export class Orchestrator {
     const traceSession = this.tracer.startSession('init', `Initialize ${effectiveName}`, {
       model: 'claude-sonnet-4-6', userPrompt: effectiveDescription,
     })
-    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr, traceSession)
+    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr)
     this.tracer.endSession(traceSession)
 
     if (!result.success) {
@@ -686,7 +686,7 @@ export class Orchestrator {
         featureId: feature.id, workerId: wId, model: 'claude-sonnet-4-6',
       })
       try {
-        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined, coderTrace)
+        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined)
       } catch (err) {
         this.tracer.endSession(coderTrace)
         if (!(err instanceof ContextResetNeededError)) {
@@ -1075,7 +1075,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
           featureId: feature.id, model: 'claude-sonnet-4-6',
         })
-        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, coderTrace)
+        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt)
         this.tracer.endSession(coderTrace)
 
         const stats = ctxMgr.getStats()
