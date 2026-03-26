@@ -254,6 +254,79 @@ describe('orchestrator.ts', () => {
       await orch.implementFeature(makeFeature({ id: 'test-feature' }))
       expect(contractExists).toBe(true)
     })
+
+    it('returns "fail" when eval-report contains regressions even if verdict is pass', async () => {
+      mockCoderAgent.mockResolvedValue(makeAgentResult({ success: true }))
+      mockEvalAgent.mockImplementation(async (projDir: string) => {
+        // Verdict is pass but regressions detected
+        const report: EvalReport = {
+          featureId: 'test-feature',
+          verdict: 'pass',
+          criteriaResults: [{ criterion: 'A', result: 'pass', evidence: 'ok' }],
+          notes: 'Feature passed but regression found',
+          evaluatedAt: new Date().toISOString(),
+          sessionId: 'eval-session',
+          regressions: [
+            { featureId: 'prev-feature', evidence: 'Previously passing endpoint now returns 500' },
+          ],
+        }
+        await writeFile(join(projDir, 'eval-report.json'), JSON.stringify(report, null, 2) + '\n')
+        return makeAgentResult()
+      })
+
+      const orch = new Orchestrator({ projectDir: dir, retryLimit: 0 })
+      const { verdict } = await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      expect(verdict).toBe('fail')
+    })
+
+    it('includes previouslyPassingFeatureIds in sprint-contract when features pass', async () => {
+      const dir2 = await makeTempProject([
+        makeFeature({ id: 'prev-a', passes: true }),
+        makeFeature({ id: 'prev-b', passes: true }),
+        makeFeature({ id: 'current', passes: false }),
+      ])
+
+      let contractData: Record<string, unknown> | null = null
+      mockCoderAgent.mockImplementation(async (projDir: string) => {
+        const { readFile } = await import('node:fs/promises')
+        const raw = await readFile(join(projDir, 'sprint-contract.json'), 'utf-8')
+        contractData = JSON.parse(raw) as Record<string, unknown>
+        return makeAgentResult({ success: true })
+      })
+      mockEvalAgent.mockImplementation(async (projDir: string) => {
+        await writeEvalReport(projDir, 'pass', 'current')
+        return makeAgentResult()
+      })
+
+      const orch = new Orchestrator({ projectDir: dir2 })
+      await orch.implementFeature(makeFeature({ id: 'current' }))
+
+      expect(contractData).not.toBeNull()
+      const prevIds = (contractData as { previouslyPassingFeatureIds?: string[] }).previouslyPassingFeatureIds
+      expect(prevIds).toContain('prev-a')
+      expect(prevIds).toContain('prev-b')
+      expect(prevIds).not.toContain('current')
+
+      await cleanTempDir(dir2)
+    })
+
+    it('sets skipRegression in sprint-contract when orchestrator has skipRegression option', async () => {
+      let contractData: Record<string, unknown> | null = null
+      mockCoderAgent.mockImplementation(async (projDir: string) => {
+        const { readFile } = await import('node:fs/promises')
+        const raw = await readFile(join(projDir, 'sprint-contract.json'), 'utf-8')
+        contractData = JSON.parse(raw) as Record<string, unknown>
+        return makeAgentResult({ success: true })
+      })
+      mockEvalAgent.mockImplementation(async (projDir: string) => {
+        await writeEvalReport(projDir, 'pass')
+        return makeAgentResult()
+      })
+
+      const orch = new Orchestrator({ projectDir: dir, skipRegression: true })
+      await orch.implementFeature(makeFeature({ id: 'test-feature' }))
+      expect((contractData as { skipRegression?: boolean } | null)?.skipRegression).toBe(true)
+    })
   })
 
   describe('run() with dryRun=true', () => {

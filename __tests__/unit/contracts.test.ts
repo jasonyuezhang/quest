@@ -67,6 +67,51 @@ describe('sprint/contracts.ts', () => {
       const contract = buildSprintContract(feature)
       expect(contract.browserTestUrl).toBeUndefined()
     })
+
+    it('includes previouslyPassingFeatureIds when provided and non-empty', () => {
+      const feature = makeFeature({ id: 'current-feature' })
+      const previousIds = ['feature-a', 'feature-b']
+      const contract = buildSprintContract(feature, previousIds)
+      expect(contract.previouslyPassingFeatureIds).toEqual(['feature-a', 'feature-b'])
+    })
+
+    it('omits previouslyPassingFeatureIds when not provided', () => {
+      const contract = buildSprintContract(makeFeature())
+      expect(contract.previouslyPassingFeatureIds).toBeUndefined()
+    })
+
+    it('omits previouslyPassingFeatureIds when empty array', () => {
+      const contract = buildSprintContract(makeFeature(), [])
+      expect(contract.previouslyPassingFeatureIds).toBeUndefined()
+    })
+
+    it('sets skipRegression: true when skipRegression flag is true', () => {
+      const contract = buildSprintContract(makeFeature(), [], true)
+      expect(contract.skipRegression).toBe(true)
+    })
+
+    it('omits skipRegression when false or undefined', () => {
+      const contractFalse = buildSprintContract(makeFeature(), [], false)
+      expect(contractFalse.skipRegression).toBeUndefined()
+      const contractUndefined = buildSprintContract(makeFeature())
+      expect(contractUndefined.skipRegression).toBeUndefined()
+    })
+
+    it('round-trips previouslyPassingFeatureIds through write/read', async () => {
+      const feature = makeFeature({ id: 'test-feat' })
+      const contract = buildSprintContract(feature, ['prev-a', 'prev-b'])
+      await writeSprintContract(dir, contract)
+      const result = await readSprintContract(dir)
+      expect(result.previouslyPassingFeatureIds).toEqual(['prev-a', 'prev-b'])
+    })
+
+    it('round-trips skipRegression through write/read', async () => {
+      const feature = makeFeature({ id: 'test-feat' })
+      const contract = buildSprintContract(feature, ['prev-a'], true)
+      await writeSprintContract(dir, contract)
+      const result = await readSprintContract(dir)
+      expect(result.skipRegression).toBe(true)
+    })
   })
 
   describe('writeSprintContract / readSprintContract', () => {
@@ -193,6 +238,29 @@ describe('sprint/contracts.ts', () => {
       await writeEvalReport(dir, report)
       const result = await readEvalReport(dir)
       expect(result?.verdict).toBe('fail')
+    })
+
+    it('round-trips eval report with regressions array', async () => {
+      const report: EvalReport = {
+        ...makeReport('fail'),
+        regressions: [
+          { featureId: 'prev-feature-1', evidence: 'Login endpoint returned 500' },
+          { featureId: 'prev-feature-2', evidence: 'Health check did not respond' },
+        ],
+      }
+      await writeEvalReport(dir, report)
+      const result = await readEvalReport(dir)
+      expect(result?.regressions).toHaveLength(2)
+      expect(result?.regressions?.[0].featureId).toBe('prev-feature-1')
+      expect(result?.regressions?.[0].evidence).toBe('Login endpoint returned 500')
+      expect(result?.regressions?.[1].featureId).toBe('prev-feature-2')
+    })
+
+    it('omits regressions field when not set', async () => {
+      const report = makeReport('pass')
+      await writeEvalReport(dir, report)
+      const result = await readEvalReport(dir)
+      expect(result?.regressions).toBeUndefined()
     })
   })
 

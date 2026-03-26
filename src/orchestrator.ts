@@ -110,15 +110,16 @@ export class Orchestrator {
     const fileConfig = Orchestrator.loadModelConfig(opts.projectDir)
     const defaultModel = opts.model ?? 'claude-sonnet-4-6'
 
+    const resolvedCoderModel = opts.coderModel ?? fileConfig.coder ?? defaultModel
+    const resolvedEvaluatorModel = opts.evaluatorModel ?? fileConfig.evaluator ?? defaultModel
+    const resolvedReviewerModel = opts.reviewerModel ?? fileConfig.reviewer ?? defaultModel
+
     this.opts = {
       maxFeatures: Infinity,
       retryLimit: 2,
       maxContextResets: 5,
       dryRun: false,
       model: defaultModel,
-      coderModel: opts.coderModel ?? fileConfig.coder ?? defaultModel,
-      evaluatorModel: opts.evaluatorModel ?? fileConfig.evaluator ?? defaultModel,
-      reviewerModel: opts.reviewerModel ?? fileConfig.reviewer ?? defaultModel,
       maxConcurrency: 4,
       review: false,
       maxContextTokens: 200_000,
@@ -129,9 +130,9 @@ export class Orchestrator {
       tdd: false,
       ...opts,
       // Re-apply resolved models after spread so explicit opts don't overwrite file config fallback
-      coderModel: opts.coderModel ?? fileConfig.coder ?? defaultModel,
-      evaluatorModel: opts.evaluatorModel ?? fileConfig.evaluator ?? defaultModel,
-      reviewerModel: opts.reviewerModel ?? fileConfig.reviewer ?? defaultModel,
+      coderModel: resolvedCoderModel,
+      evaluatorModel: resolvedEvaluatorModel,
+      reviewerModel: resolvedReviewerModel,
     }
     this.tracer = new Tracer(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
@@ -1001,9 +1002,9 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
       printAgentBanner('eval', totalSteps, totalSteps, feature.id)
       const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id })
       const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
-        featureId: feature.id, model: 'claude-sonnet-4-6',
+        featureId: feature.id, model: this.opts.evaluatorModel ?? this.opts.model,
       })
-      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts })
+      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts, model: this.opts.evaluatorModel ?? this.opts.model })
       this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
@@ -1146,9 +1147,9 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         }
 
         const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
-          featureId: feature.id, model: 'claude-sonnet-4-6',
+          featureId: feature.id, model: this.opts.coderModel ?? this.opts.model,
         })
-        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd })
+        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: this.opts.coderModel ?? this.opts.model })
         this.tracer.endSession(coderTrace)
 
         const stats = ctxMgr.getStats()

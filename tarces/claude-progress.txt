@@ -1,0 +1,10 @@
+{
+  "projectName": "tarces",
+  "totalFeatures": 15,
+  "passedFeatures": 0,
+  "currentFeatureId": null,
+  "lastCommitSha": null,
+  "lastSessionId": null,
+  "lastUpdated": "2026-03-26T20:17:38.671Z",
+  "contextResets": 0
+}

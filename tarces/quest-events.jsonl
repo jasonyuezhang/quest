@@ -1,0 +1,9 @@
+{"type":"dag_built","levels":1,"criticalPath":["project-setup-1"],"maxParallelism":15,"totalFeatures":15,"ts":"2026-03-26T20:17:40.624Z"}
+{"type":"run_start","projectName":"tarces","total":15,"concurrency":4,"ts":"2026-03-26T20:17:40.624Z"}
+{"type":"batch_plan","ready":4,"dispatching":4,"inFlight":0,"reason":"15 ready, dispatching 4 (0 in-flight, critical path: project-setup-1)","ts":"2026-03-26T20:17:40.624Z"}
+{"type":"feature_start","featureId":"project-setup-1","featureName":"Project Setup","priority":"high","index":1,"total":15,"workerId":1,"ts":"2026-03-26T20:17:40.672Z"}
+{"type":"feature_start","featureId":"list-view-11","featureName":"List View","priority":"high","index":2,"total":15,"workerId":2,"ts":"2026-03-26T20:17:40.712Z"}
+{"type":"feature_start","featureId":"basic-authentication-3","featureName":"Basic Authentication","priority":"medium","index":3,"total":15,"workerId":3,"ts":"2026-03-26T20:17:40.754Z"}
+{"type":"feature_start","featureId":"user-registration-4","featureName":"User Registration","priority":"medium","index":4,"total":15,"workerId":4,"ts":"2026-03-26T20:17:40.801Z"}
+{"type":"agent_start","agent":"coder","workerId":0,"ts":"2026-03-26T20:17:42.299Z"}
+{"type":"agent_start","agent":"coder","workerId":0,"ts":"2026-03-26T20:17:42.328Z"}

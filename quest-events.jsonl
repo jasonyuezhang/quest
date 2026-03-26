@@ -7185,3 +7185,74 @@
 {"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/sprint-contract.json","turn":23,"ts":"2026-03-26T12:34:05.196Z"}
 {"type":"tool_use","agent":"coder","tool":"Write","summary":"/Volumes/dock/src/quest/sprint-completion.json","turn":24,"ts":"2026-03-26T12:34:10.166Z"}
 {"type":"tool_use","agent":"coder","tool":"Bash","summary":"git add sprint-completion.json sprint-contract.json claude-progress.txt quest-ev…","turn":25,"ts":"2026-03-26T12:34:13.710Z"}
+{"type":"feature_start","featureId":"run-report-export-16","featureName":"Run Summary Report Export","priority":"medium","index":15,"total":25,"workerId":4,"ts":"2026-03-26T21:12:38.888Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":1,"workerId":0,"ts":"2026-03-26T21:12:39.541Z"}
+{"type":"agent_start","agent":"coder","workerId":0,"ts":"2026-03-26T21:12:40.545Z"}
+{"type":"tool_use","agent":"coder","tool":"Grep","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":1,"workerId":0,"ts":"2026-03-26T21:12:42.371Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/__tests__/unit/contracts.test.ts","turn":3,"workerId":0,"ts":"2026-03-26T21:12:42.856Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"pwd","turn":4,"workerId":0,"ts":"2026-03-26T21:12:43.254Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"git log --oneline -5","turn":5,"workerId":0,"ts":"2026-03-26T21:12:43.303Z"}
+{"type":"tool_use","agent":"coder","tool":"Grep","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":7,"workerId":0,"ts":"2026-03-26T21:12:46.317Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"…s/dock/src/quest/.quest-workers/worker-4/claude-progress.txt","turn":8,"workerId":0,"ts":"2026-03-26T21:12:46.784Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"…/dock/src/quest/.quest-workers/worker-4/current-feature.json","turn":10,"workerId":0,"ts":"2026-03-26T21:12:47.093Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/contracts.test.ts","turn":11,"workerId":0,"ts":"2026-03-26T21:12:47.867Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":12,"workerId":0,"ts":"2026-03-26T21:12:49.206Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"…/dock/src/quest/.quest-workers/worker-4/sprint-contract.json","turn":13,"workerId":0,"ts":"2026-03-26T21:12:49.219Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/contracts.test.ts","turn":14,"workerId":0,"ts":"2026-03-26T21:12:50.731Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"bash init.sh 2>&1 | tail -20","turn":15,"workerId":0,"ts":"2026-03-26T21:12:52.165Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":16,"workerId":0,"ts":"2026-03-26T21:12:54.565Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":18,"workerId":0,"ts":"2026-03-26T21:12:57.408Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/__tests__/unit/contracts.test.ts","turn":19,"workerId":0,"ts":"2026-03-26T21:12:57.527Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"grep -n \"writeEvalReport\\|makeFeature\\|makeTempProject\\|readSprintContract\" /Vol…","turn":21,"workerId":0,"ts":"2026-03-26T21:13:01.509Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":22,"workerId":0,"ts":"2026-03-26T21:13:01.532Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/orchestrator.test.ts","turn":23,"workerId":0,"ts":"2026-03-26T21:13:01.715Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/orchestrator.test.ts","turn":24,"workerId":0,"ts":"2026-03-26T21:13:04.714Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/.quest-workers/worker-4/","turn":26,"workerId":0,"ts":"2026-03-26T21:13:04.923Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":27,"workerId":0,"ts":"2026-03-26T21:13:05.163Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/.quest-workers/worker-4/src/","turn":28,"workerId":0,"ts":"2026-03-26T21:13:07.263Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"grep -n \"describe.*implementFeature\\|it\\(\" /Volumes/dock/src/quest/__tests__/uni…","turn":29,"workerId":0,"ts":"2026-03-26T21:13:07.820Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/orchestrator.test.ts","turn":30,"workerId":0,"ts":"2026-03-26T21:13:08.224Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/","turn":32,"workerId":0,"ts":"2026-03-26T21:13:10.699Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/src/","turn":35,"workerId":0,"ts":"2026-03-26T21:13:13.254Z"}
+{"type":"tool_use","agent":"coder","tool":"Grep","summary":"/Volumes/dock/src/quest/src/cost.ts","turn":36,"workerId":0,"ts":"2026-03-26T21:13:13.744Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/src/cli.ts","turn":38,"workerId":0,"ts":"2026-03-26T21:13:16.735Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/src/__tests__/","turn":39,"workerId":0,"ts":"2026-03-26T21:13:16.784Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm run build 2>&1 | tail -30","turn":40,"workerId":0,"ts":"2026-03-26T21:13:17.329Z"}
+{"type":"tool_use","agent":"coder","tool":"Write","summary":"/Volumes/dock/src/quest/__tests__/unit/tdd-mode.test.ts","turn":41,"workerId":0,"ts":"2026-03-26T21:13:19.220Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":42,"workerId":0,"ts":"2026-03-26T21:13:21.653Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npx vitest run __tests__/unit/tdd-mode.test.ts 2>&…","turn":43,"workerId":0,"ts":"2026-03-26T21:13:22.352Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/src/events.ts","turn":45,"workerId":0,"ts":"2026-03-26T21:13:24.452Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/src/cost.ts","turn":46,"workerId":0,"ts":"2026-03-26T21:13:24.469Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/__tests__/unit/orchestrator.test.ts","turn":47,"workerId":0,"ts":"2026-03-26T21:13:24.640Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | tail -60","turn":53,"workerId":0,"ts":"2026-03-26T21:13:27.774Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/__tests__/ && cat /Volumes/dock/src/quest/src/__tests…","turn":54,"workerId":0,"ts":"2026-03-26T21:13:28.771Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/package.json | grep -A5 '\"scripts\"'","turn":55,"workerId":0,"ts":"2026-03-26T21:13:29.165Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/src/orchestrator.ts","turn":56,"workerId":0,"ts":"2026-03-26T21:13:29.340Z"}
+{"type":"tool_use","agent":"coder","tool":"Edit","summary":"/Volumes/dock/src/quest/__tests__/unit/tdd-mode.test.ts","turn":57,"workerId":0,"ts":"2026-03-26T21:13:29.497Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm run build 2>&1 | tail -20","turn":58,"workerId":0,"ts":"2026-03-26T21:13:31.792Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | tail -20","turn":59,"workerId":0,"ts":"2026-03-26T21:13:31.798Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npx vitest run __tests__/unit/tdd-mode.test.ts 2>&…","turn":60,"workerId":0,"ts":"2026-03-26T21:13:32.312Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | grep -E \"(PASS|FAIL|✓|✗|Tests?:)\" …","turn":62,"workerId":0,"ts":"2026-03-26T21:13:35.872Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | tail -40","turn":63,"workerId":0,"ts":"2026-03-26T21:13:35.981Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | tail -20","turn":65,"workerId":0,"ts":"2026-03-26T21:13:39.423Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | grep -E \"passed|failed|error\" | he…","turn":66,"workerId":0,"ts":"2026-03-26T21:13:39.722Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"git -C /Volumes/dock/src/quest log --oneline -3 && git -C /Volumes/dock/src/ques…","turn":68,"workerId":0,"ts":"2026-03-26T21:13:40.365Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && mkdir -p coverage/.tmp && npm test 2>&1 | tail -40","turn":69,"workerId":0,"ts":"2026-03-26T21:13:40.451Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npx vitest run 2>&1 | tail -10","turn":70,"workerId":0,"ts":"2026-03-26T21:13:43.734Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && npm test 2>&1 | grep -E \"Tests|Test Files|passed|f…","turn":71,"workerId":0,"ts":"2026-03-26T21:13:43.850Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/__tests__/unit/tdd-mode.test.ts | head -50","turn":73,"workerId":0,"ts":"2026-03-26T21:13:46.018Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"grep -n \"failing tests\\|tddMode\\|tdd\" /Volumes/dock/src/quest/src/agents/coder.t…","turn":74,"workerId":0,"ts":"2026-03-26T21:13:46.999Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cat /Volumes/dock/src/quest/src/failure-classifier.ts | head -50","turn":77,"workerId":0,"ts":"2026-03-26T21:13:48.972Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"ls /Volumes/dock/src/quest/__tests__/unit/","turn":78,"workerId":0,"ts":"2026-03-26T21:13:49.091Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"grep -n \"failing tests\\|red-green\\|TDD\\|tdd\" /Volumes/dock/src/quest/src/agents/…","turn":79,"workerId":0,"ts":"2026-03-26T21:13:50.937Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && git add __tests__/unit/tdd-mode.test.ts && git com…","turn":81,"workerId":0,"ts":"2026-03-26T21:13:52.240Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && node dist/cli.js run --help 2>&1 | grep -E \"coder|…","turn":82,"workerId":0,"ts":"2026-03-26T21:13:52.549Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"sed -n '96,145p' /Volumes/dock/src/quest/src/agents/coder.ts","turn":83,"workerId":0,"ts":"2026-03-26T21:13:54.177Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && node dist/cli.js status --help 2>&1 | grep config","turn":84,"workerId":0,"ts":"2026-03-26T21:13:55.441Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && git log --oneline -1","turn":85,"workerId":0,"ts":"2026-03-26T21:13:55.464Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && node dist/cli.js status --config 2>&1","turn":86,"workerId":0,"ts":"2026-03-26T21:13:58.735Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"sed -n '115,145p' /Volumes/dock/src/quest/__tests__/unit/tdd-mode.test.ts","turn":88,"workerId":0,"ts":"2026-03-26T21:13:59.446Z"}
+{"type":"tool_use","agent":"coder","tool":"Write","summary":"…ock/src/quest/.quest-workers/worker-3/sprint-completion.json","turn":91,"workerId":0,"ts":"2026-03-26T21:14:03.033Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && node dist/cli.js run --coder-model invalid-model .…","turn":92,"workerId":0,"ts":"2026-03-26T21:14:03.970Z"}
+{"type":"tool_use","agent":"coder","tool":"Read","summary":"/Volumes/dock/src/quest/__tests__/unit/tdd-mode.test.ts","turn":95,"workerId":0,"ts":"2026-03-26T21:14:08.197Z"}
+{"type":"tool_use","agent":"coder","tool":"Bash","summary":"cd /Volumes/dock/src/quest && git add -A && git commit -m \"feat: implement model…","turn":96,"workerId":0,"ts":"2026-03-26T21:14:08.596Z"}
