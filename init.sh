@@ -1,25 +1,27 @@
 #!/bin/bash
-# init.sh — Quest coding agent harness setup script
-#
-# Installs Node.js dependencies, compiles the TypeScript source,
-# and links the CLI globally so `quest` is available as a command.
-# This is a CLI tool (no dev server); the compiled output goes to dist/.
+# init.sh — Quest CLI Harness bootstrap script
+# Installs Node dependencies, builds TypeScript, and links the `quest` binary globally.
+# The dev server is a CLI tool (no HTTP server), so this script just ensures
+# the project is compiled and ready for `quest run` invocations.
 
 set -e
 
-echo "==> Installing Node.js dependencies..."
+echo "==> Installing dependencies..."
 npm install 2>&1
 
 echo "==> Building TypeScript..."
 npm run build 2>&1
 
-echo "==> Linking quest CLI globally..."
-npm link 2>&1 || echo "  (npm link skipped — may need sudo or manual PATH setup)"
+echo "==> Linking quest binary..."
+npm link 2>&1 || true
 
 echo ""
-echo "Quest harness ready."
-echo "  quest init <project-dir>   — initialize a project"
-echo "  quest run  <project-dir>   — run the orchestration loop"
-echo "  quest status               — show progress"
-echo ""
-echo "Dev workflow: npx tsx src/cli.ts <command> [args]"
+echo "Quest CLI is ready."
+echo "Usage:"
+echo "  quest init <dir>        # Initialize a project"
+echo "  quest run [dir]         # Run the full orchestration loop"
+echo "  quest resume [dir]      # Resume from last progress"
+echo "  quest status [dir]      # Show feature progress"
+echo "  quest eval <id> [dir]   # Evaluate a single feature"
+echo "  quest feature <id> [dir] # Implement a single feature"
+echo "  quest monitor [dir]     # Live TUI dashboard"

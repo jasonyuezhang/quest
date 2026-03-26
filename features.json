@@ -1,0 +1,2870 @@
+{
+  "version": "1.0",
+  "projectName": "quest-cli",
+  "generatedAt": "2026-03-25T22:05:00.000Z",
+  "features": [
+    {
+      "id": "cli-init-command-basic",
+      "name": "quest init — Basic Project Initialization",
+      "description": "The `quest init` command accepts a project directory and creates the three scaffold files: init.sh, features.json, and claude-progress.txt",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest init <dir>` creates init.sh in the target directory",
+        "Running `quest init <dir>` creates features.json with at least 10 features",
+        "Running `quest init <dir>` creates claude-progress.txt with valid JSON",
+        "Command exits with code 0 on success",
+        "Command prints a confirmation message to stdout when complete"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-init-project-name-option",
+      "name": "quest init — --project-name Option",
+      "description": "The `quest init` command accepts a --project-name flag to override the default (directory basename)",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest init <dir> --project-name foo` sets projectName to 'foo' in features.json",
+        "Running `quest init <dir> --project-name foo` sets projectName to 'foo' in claude-progress.txt",
+        "When --project-name is omitted, projectName defaults to the basename of the target directory",
+        "Invalid or empty --project-name prints an error and exits non-zero"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-init-description-option",
+      "name": "quest init — --description Option",
+      "description": "The `quest init` command accepts a --description flag that is passed to the initializer agent for context-aware feature generation",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest init <dir> --description 'My app'` passes the description to the initializer agent",
+        "Features generated reflect the description text when provided",
+        "Omitting --description uses an empty string default without errors",
+        "The description is visible in the initializer agent's prompt context"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-init-nonexistent-dir",
+      "name": "quest init — Nonexistent Directory Error",
+      "description": "The `quest init` command prints a clear error and exits non-zero when the given directory does not exist",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest init /nonexistent/path` prints an error containing the path",
+        "The process exits with a non-zero exit code",
+        "No partial files are created in the nonexistent directory",
+        "Error message is printed to stderr"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-command-basic",
+      "name": "quest run — Basic Orchestration Loop",
+      "description": "The `quest run` command starts the full orchestration loop, selecting features one-by-one and invoking coder + evaluator agents",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest run <dir>` begins processing features from features.json",
+        "Each feature is processed in priority order (high → medium → low)",
+        "The loop stops when all features pass or limits are reached",
+        "Progress is persisted to claude-progress.txt after each feature",
+        "Command prints per-feature status lines to stdout"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-max-features-option",
+      "name": "quest run — --max-features Option",
+      "description": "The `quest run` command respects the --max-features flag to limit how many features are processed in one session",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest run --max-features 5` stops after implementing at most 5 features",
+        "The count applies to features processed (attempted), not just passed",
+        "claude-progress.txt reflects the actual features processed when stopped",
+        "Remaining features are not skipped — they stay pending"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-retry-limit-option",
+      "name": "quest run — --retry-limit Option",
+      "description": "The --retry-limit option controls how many times the coder agent retries a feature that fails evaluation",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest run --retry-limit 3` allows up to 3 retry attempts per failing feature",
+        "After exceeding retry-limit, the feature is marked failed and skipped for this session",
+        "A warning is printed when a feature exhausts its retry budget",
+        "The retry count resets when a new feature begins"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-max-resets-option",
+      "name": "quest run — --max-resets Option",
+      "description": "The --max-resets option controls maximum context resets per feature before giving up",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest run --max-resets 3` limits context resets to 3 per feature",
+        "Exceeding max-resets causes the feature to be skipped with a warning",
+        "The contextResets counter in claude-progress.txt reflects resets accurately",
+        "max-resets defaults to 5 when not provided"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-dry-run-option",
+      "name": "quest run — --dry-run Option",
+      "description": "The --dry-run flag prints the planned sequence of features without invoking any agents or making changes",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest run --dry-run` lists the features that would be processed",
+        "No agents are spawned when --dry-run is active",
+        "No files are modified on disk when --dry-run is active",
+        "The output clearly labels itself as a dry run"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-resume-command",
+      "name": "quest resume — Resume from Last Progress",
+      "description": "The `quest resume` command reads claude-progress.txt and continues from the last known currentFeatureId",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest resume` reads currentFeatureId from claude-progress.txt",
+        "Processing continues from the feature after the last completed one",
+        "Already-passing features are skipped without re-running",
+        "An error is printed if claude-progress.txt does not exist"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-status-command",
+      "name": "quest status — Feature Progress Summary",
+      "description": "The `quest status` command prints a summary of passing/total features and the next pending feature",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest status` prints N/total features with a percentage",
+        "The next pending high-priority feature is highlighted",
+        "Current feature (if any) is displayed",
+        "Command exits 0 even when no features pass yet"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-status-show-all-option",
+      "name": "quest status — --show-all Option",
+      "description": "The --show-all flag on `quest status` lists every feature with its pass/fail state",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest status --show-all` lists every feature by id",
+        "Passing features are marked with ✓ (or equivalent symbol)",
+        "Failing features are marked with ○ (or equivalent symbol)",
+        "Priority is shown for each feature"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-eval-command",
+      "name": "quest eval — Evaluate a Single Feature",
+      "description": "The `quest eval <feature-id>` command runs only the evaluator agent for one feature and prints detailed results",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest eval <id>` invokes the evaluator agent for that feature ID",
+        "Verdict (PASS/FAIL) is printed clearly to stdout",
+        "Each acceptance criterion result is printed with a pass/fail indicator",
+        "Evidence for each criterion is shown in the output",
+        "Command exits non-zero when verdict is FAIL"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-eval-missing-feature",
+      "name": "quest eval — Missing Feature ID Error",
+      "description": "The `quest eval` command prints a clear error when the given feature ID does not exist in features.json",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest eval nonexistent-id` prints an error mentioning the missing ID",
+        "The process exits with a non-zero exit code",
+        "The error is actionable (suggests running `quest status` to see valid IDs)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-feature-command",
+      "name": "quest feature — Implement Single Feature Without Evaluation",
+      "description": "The `quest feature <feature-id>` command runs only the coder agent for one feature without evaluating",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest feature <id>` writes a sprint contract and invokes the coder agent",
+        "The evaluator is NOT run after the coder completes",
+        "Duration and token stats are printed after completion",
+        "A warning note is shown reminding the user to run `quest eval` to verify"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-monitor-command",
+      "name": "quest monitor — Live TUI Dashboard",
+      "description": "The `quest monitor` command launches an Ink/React TUI that streams agent activity from quest-events.jsonl",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest monitor` renders a terminal UI without crashing",
+        "The TUI displays historical events from quest-events.jsonl",
+        "New events appended to quest-events.jsonl are reflected in the display",
+        "The monitor polls for updates at ~500ms intervals"
+      ],
+      "browserTestUrl": null,
+      "passes": false
+    },
+    {
+      "id": "cli-monitor-nonexistent-dir",
+      "name": "quest monitor — Nonexistent Directory Error",
+      "description": "The `quest monitor` command prints an error and exits when the given directory does not exist",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest monitor /bad/dir` prints an error with the path",
+        "Process exits non-zero",
+        "No TUI is rendered before the error"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-selection",
+      "name": "Orchestrator — Priority-Based Feature Selection",
+      "description": "The orchestrator selects the next feature to implement by ordering: high priority first, then medium, then low; within a tier sorted by array order",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "High-priority features are always processed before medium or low",
+        "Medium-priority features are processed before low when all high are done",
+        "Within the same priority tier, features are processed in their array order",
+        "Already-passing features are never selected as next"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-progress-persistence",
+      "name": "Orchestrator — Progress Persistence After Each Feature",
+      "description": "After each feature is evaluated, the orchestrator updates claude-progress.txt with the latest state",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "claude-progress.txt is updated after every feature evaluation (pass or fail)",
+        "passedFeatures count is incremented when a feature passes",
+        "currentFeatureId reflects the feature just processed",
+        "lastUpdated is set to the current ISO timestamp",
+        "lastCommitSha is updated after a successful git commit"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-context-reset-handling",
+      "name": "Orchestrator — Context Reset Detection and Recovery",
+      "description": "When the coder agent requests a context reset, the orchestrator increments the reset counter and retries the feature with a fresh agent session",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "A context reset signal from the coder increments contextResets in progress",
+        "The orchestrator retries the same feature after a reset",
+        "The feature is abandoned when maxContextResets is exceeded",
+        "An event is emitted to quest-events.jsonl on each context reset"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-git-commit-after-pass",
+      "name": "Orchestrator — Git Commit After Feature Passes",
+      "description": "When a feature passes evaluation, the orchestrator commits the changes to git and stores the SHA in progress",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "A git commit is created after each feature passes evaluation",
+        "The commit message includes the feature ID",
+        "The lastCommitSha in claude-progress.txt is updated to the new SHA",
+        "Commit failure is handled gracefully (warning printed, loop continues)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-all-features-complete",
+      "name": "Orchestrator — Loop Termination When All Features Pass",
+      "description": "The orchestrator terminates cleanly when all features in features.json have passes:true",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The orchestration loop exits when no pending features remain",
+        "A success message is printed showing the total features completed",
+        "The process exits with code 0",
+        "A final summary event is emitted to quest-events.jsonl"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-event-emission",
+      "name": "Orchestrator — Event Emission to quest-events.jsonl",
+      "description": "The orchestrator emits structured JSONL events for all major state transitions to quest-events.jsonl",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Events are appended (not overwritten) to quest-events.jsonl",
+        "Each event is valid JSON on a single line",
+        "Events include at minimum: type, timestamp, and relevant payload fields",
+        "Feature-start, feature-pass, feature-fail, and context-reset events are all emitted"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-sprint-contract-consumption",
+      "name": "Coder Agent — Sprint Contract Consumption",
+      "description": "The coder agent reads the sprint-contract.json file to understand what feature to implement before beginning work",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent reads sprint-contract.json at startup",
+        "The feature description from the contract is incorporated into the agent's system prompt",
+        "Acceptance criteria from the contract guide the agent's implementation plan",
+        "The agent fails fast if sprint-contract.json is missing or malformed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-file-editing",
+      "name": "Coder Agent — File Editing Capabilities",
+      "description": "The coder agent can read, write, and edit source files to implement the target feature",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent can read existing TypeScript source files",
+        "The coder agent can create new files when needed",
+        "The coder agent can modify existing files using Edit or Write tools",
+        "File changes are reflected on disk after the agent session completes"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-build-verification",
+      "name": "Coder Agent — TypeScript Build Verification",
+      "description": "After making changes, the coder agent verifies the build passes by running `npm run build` or `tsc --noEmit`",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent runs a build check after implementing changes",
+        "TypeScript compile errors are detected and the agent attempts to fix them",
+        "The agent does not declare success if the build fails",
+        "Build output is included in the agent's reasoning"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-token-tracking",
+      "name": "Coder Agent — Token Usage Tracking",
+      "description": "The coder agent session accumulates token usage statistics (input and output) via the ContextManager",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Input tokens are tracked across all turns of the coder agent session",
+        "Output tokens are tracked across all turns",
+        "ContextManager.getStats() returns accurate totals after the session",
+        "Token stats are included in the completion log line"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-context-reset-signal",
+      "name": "Coder Agent — Context Reset Signal",
+      "description": "When the coder agent determines it has lost context or is spinning, it emits a context-reset signal that the orchestrator can detect",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent can signal a context reset by returning a specific result flag",
+        "The orchestrator receives and acts on the context-reset signal",
+        "The signal includes a reason string explaining why the reset was requested",
+        "The agent does not loop infinitely before signaling a reset"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-duration-tracking",
+      "name": "Coder Agent — Duration Tracking",
+      "description": "The coder agent records how many milliseconds elapsed from start to finish of the session",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The coder agent result includes a durationMs field",
+        "Duration is measured from agent start to final response",
+        "Duration is printed in the quest feature command output",
+        "Duration is included in the quest-events.jsonl completion event"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-eval-report",
+      "name": "Evaluator Agent — Writes eval-report.json",
+      "description": "The evaluator agent writes an eval-report.json file with a verdict and per-criterion results after evaluating a feature",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "eval-report.json is created in the project directory after evaluation",
+        "The file contains a 'verdict' field of 'pass' or 'fail'",
+        "The file contains a 'criteriaResults' array with one entry per acceptance criterion",
+        "Each entry has 'criterion', 'result' (pass/fail), and 'evidence' fields",
+        "The file is valid JSON"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-pass-verdict",
+      "name": "Evaluator Agent — Pass Verdict on Passing Feature",
+      "description": "The evaluator agent sets verdict:pass when all acceptance criteria are satisfied",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "When all criteria pass, verdict is 'pass'",
+        "All criteriaResults entries have result:'pass'",
+        "The orchestrator marks the feature as passes:true in features.json",
+        "A pass event is emitted to quest-events.jsonl"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-fail-verdict",
+      "name": "Evaluator Agent — Fail Verdict on Failing Feature",
+      "description": "The evaluator agent sets verdict:fail when any acceptance criterion is not satisfied",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "When any criterion fails, verdict is 'fail'",
+        "At least one criteriaResults entry has result:'fail'",
+        "The orchestrator does not mark the feature as passes:true",
+        "A fail event is emitted to quest-events.jsonl with the failing criteria"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-source-inspection",
+      "name": "Evaluator Agent — Source Code Inspection",
+      "description": "The evaluator agent reads source files to verify implementation correctness against acceptance criteria",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The evaluator reads relevant TypeScript source files before rendering a verdict",
+        "Source code evidence is referenced in the 'evidence' field of each criterion result",
+        "The evaluator can access any file in the project directory",
+        "The evaluator does not modify source files"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-bash-execution",
+      "name": "Evaluator Agent — Bash Command Execution for Verification",
+      "description": "The evaluator agent can run bash commands (e.g., build checks, test runs) to gather objective evidence",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The evaluator can run `npm run build` and inspect output",
+        "The evaluator can run `node` or `tsx` scripts for quick checks",
+        "Command output is used as evidence in criteriaResults",
+        "The evaluator does not run destructive commands (rm -rf, git reset, etc.)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sprint-contract-generation",
+      "name": "Sprint Contract — Generation from Feature",
+      "description": "buildSprintContract() converts a Feature object into a structured sprint-contract.json that the coder agent reads",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "buildSprintContract() returns an object with featureId, name, description, and acceptanceCriteria",
+        "All acceptance criteria from the Feature are included in the contract",
+        "The contract includes a generatedAt timestamp",
+        "The contract includes category and priority from the feature"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sprint-contract-file-write",
+      "name": "Sprint Contract — File Write",
+      "description": "writeSprintContract() writes the sprint contract to sprint-contract.json in the project directory",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "sprint-contract.json is written to the correct project directory",
+        "The file contains valid JSON matching the sprint contract schema",
+        "Existing sprint-contract.json is overwritten with the new contract",
+        "The function awaits the file write before returning"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sprint-contract-eval-report-read",
+      "name": "Sprint Contract — Read Eval Report",
+      "description": "readEvalReport() reads eval-report.json from the project directory and returns a typed object or null if missing",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "readEvalReport() returns the parsed eval report when the file exists",
+        "readEvalReport() returns null when eval-report.json does not exist",
+        "The returned object is typed with verdict, notes, and criteriaResults fields",
+        "Invalid JSON causes the function to throw, not return null"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-read",
+      "name": "State — readFeaturesFile()",
+      "description": "readFeaturesFile() reads and parses features.json from a project directory, returning a typed FeaturesFile object",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "readFeaturesFile() reads features.json from the given project directory",
+        "The returned object has projectName, version, generatedAt, and features array",
+        "Each feature in the array is fully typed with all required fields",
+        "An error is thrown if features.json does not exist or is invalid JSON"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-write",
+      "name": "State — writeFeaturesFile()",
+      "description": "writeFeaturesFile() persists an updated FeaturesFile back to features.json atomically",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "writeFeaturesFile() writes the file to the correct path in the project directory",
+        "The written file is valid, pretty-printed JSON",
+        "The write is awaited before the function returns",
+        "Existing content is overwritten (not merged)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-mark-passing",
+      "name": "State — markFeaturePassing()",
+      "description": "markFeaturePassing() finds the feature by ID in the FeaturesFile and sets its passes field to true",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The correct feature (by ID) has its passes field set to true",
+        "All other features are unchanged",
+        "If the feature ID is not found, an error is thrown",
+        "The updated FeaturesFile is written to disk"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-get-next",
+      "name": "State — getNextFeature()",
+      "description": "getNextFeature() returns the next feature to implement from the sorted list (first non-passing by priority)",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Returns the first non-passing high-priority feature if any exist",
+        "Falls back to medium-priority features when no high-priority features remain",
+        "Falls back to low-priority features when no medium remain",
+        "Returns null/undefined when all features are passing"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-count-passing",
+      "name": "State — countPassing()",
+      "description": "countPassing() returns the number of features with passes:true",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Returns 0 when no features pass",
+        "Returns the correct count when some features pass",
+        "Returns the total count when all features pass",
+        "Does not count features with passes:false or missing passes field"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-progress-read",
+      "name": "State — readProgress()",
+      "description": "readProgress() reads and parses claude-progress.txt from the project directory",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "readProgress() reads claude-progress.txt from the given project directory",
+        "The returned object has all required fields: projectName, totalFeatures, passedFeatures, etc.",
+        "Returns null or throws a typed error when the file does not exist",
+        "Invalid JSON causes an error to be thrown"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-progress-write",
+      "name": "State — writeProgress()",
+      "description": "writeProgress() persists the progress object to claude-progress.txt as pretty-printed JSON",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "writeProgress() writes to claude-progress.txt in the correct project directory",
+        "Output is pretty-printed (2-space indented) JSON",
+        "All fields of the Progress object are included",
+        "The write is awaited before the function returns"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-token-accumulation",
+      "name": "Context Manager — Token Accumulation",
+      "description": "ContextManager accumulates input and output token counts across all turns of an agent session",
+      "category": "performance",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "addUsage() increments totalInput and totalOutput correctly",
+        "getStats() returns accurate cumulative totals",
+        "Multiple addUsage() calls are summed, not replaced",
+        "Initial stats are zero before any usage is recorded"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-reset",
+      "name": "Context Manager — Reset Method",
+      "description": "ContextManager.reset() clears all accumulated token stats and usage history",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "After reset(), getStats() returns zero for all fields",
+        "After reset(), the turn history is cleared",
+        "reset() can be called multiple times without errors",
+        "Subsequent addUsage() calls after reset() accumulate from zero"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-turn-limit-detection",
+      "name": "Context Manager — Turn Limit Detection",
+      "description": "ContextManager detects when the agent is approaching context limits and signals that a reset is needed",
+      "category": "performance",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "isApproachingLimit() returns true when total tokens exceed a configured threshold",
+        "The threshold is configurable at construction time",
+        "When the limit is detected, the coder agent can act on it",
+        "The limit check considers both input and output tokens"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-session-stats",
+      "name": "Context Manager — Per-Session Statistics",
+      "description": "ContextManager provides per-session statistics including turn count, total tokens, and duration",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "getStats() returns turnCount reflecting how many agent turns occurred",
+        "getStats() returns totalTokens as input + output sum",
+        "getStats() returns session duration in milliseconds",
+        "Stats can be serialized to a plain object for logging"
+      ],
+      "passes": false
+    },
+    {
+      "id": "initializer-agent-feature-generation",
+      "name": "Initializer Agent — Feature Generation",
+      "description": "The initializer agent generates 200+ features based on the project description and existing codebase",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The initializer agent produces at least 200 features in features.json",
+        "Features span multiple categories: auth, ui, api, data, performance, security, ux",
+        "Each feature has a unique id in kebab-case",
+        "Each feature has at least 3 specific, testable acceptance criteria",
+        "No feature has passes:true initially"
+      ],
+      "passes": false
+    },
+    {
+      "id": "initializer-agent-init-sh-creation",
+      "name": "Initializer Agent — init.sh Creation",
+      "description": "The initializer agent creates an appropriate init.sh for the detected project type",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "init.sh is created in the target project directory",
+        "The script contains the shebang #!/bin/bash",
+        "The script installs dependencies appropriate to the project type",
+        "The file is made executable (chmod +x)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "initializer-agent-progress-creation",
+      "name": "Initializer Agent — claude-progress.txt Creation",
+      "description": "The initializer agent creates claude-progress.txt with correct initial values",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "claude-progress.txt is created with totalFeatures matching the generated feature count",
+        "passedFeatures is set to 0",
+        "currentFeatureId is null",
+        "lastCommitSha is null",
+        "contextResets is 0",
+        "lastUpdated is a valid ISO timestamp"
+      ],
+      "passes": false
+    },
+    {
+      "id": "initializer-agent-git-commit",
+      "name": "Initializer Agent — Initial Git Commit",
+      "description": "The initializer agent stages and commits all scaffold files to git after creating them",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "init.sh, features.json, and claude-progress.txt are staged after creation",
+        "A git commit is made with message 'chore: initialize quest harness'",
+        "If no git repo exists, one is initialized first",
+        "The commit SHA is printed to stdout"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-app-renders",
+      "name": "TUI Monitor — App Component Renders Without Crash",
+      "description": "The Ink App component renders in the terminal without throwing errors on startup",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest monitor` renders at least one frame without crashing",
+        "No unhandled promise rejections occur on startup",
+        "The component mounts cleanly even when quest-events.jsonl is empty",
+        "The component mounts cleanly when quest-events.jsonl does not exist"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-event-list",
+      "name": "TUI Monitor — Event List Display",
+      "description": "The TUI monitor displays a scrollable list of recent agent events from quest-events.jsonl",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Events from quest-events.jsonl are rendered as rows in the TUI",
+        "Each row shows the event type and timestamp",
+        "The most recent events appear at the bottom",
+        "At least 20 events are visible without scrolling on a standard terminal"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-live-updates",
+      "name": "TUI Monitor — Live Event Updates",
+      "description": "The TUI monitor polls quest-events.jsonl and updates the display when new events are appended",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "New events appended to quest-events.jsonl are displayed within 1 second",
+        "The display updates without requiring a keypress or restart",
+        "The polling interval is approximately 500ms",
+        "Memory does not grow unboundedly with extended live polling"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-feature-progress-bar",
+      "name": "TUI Monitor — Feature Progress Bar",
+      "description": "The TUI monitor displays a progress bar showing passing/total features alongside a percentage",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A progress bar is visible in the TUI",
+        "The bar shows the ratio of passing to total features",
+        "The percentage is computed and displayed numerically",
+        "The bar updates when new pass events are received"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-current-feature-display",
+      "name": "TUI Monitor — Current Feature Display",
+      "description": "The TUI monitor prominently displays the feature currently being implemented",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The current feature ID is shown in a highlighted section",
+        "The feature name or description is shown alongside the ID",
+        "The display updates when a new feature begins",
+        "A 'No active feature' state is shown when idle"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-token-stats",
+      "name": "TUI Monitor — Token Statistics Display",
+      "description": "The TUI monitor shows cumulative token usage (input and output) for the current session",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Input and output token counts are displayed in the TUI",
+        "Counts update as new token-usage events arrive",
+        "Tokens are displayed in a human-readable format (e.g., 12.3k)",
+        "The section is clearly labeled 'Tokens' or equivalent"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-quit-key",
+      "name": "TUI Monitor — Quit Key Handler",
+      "description": "The TUI monitor exits cleanly when the user presses 'q' or Ctrl+C",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Pressing 'q' causes the TUI to unmount and the process to exit",
+        "Pressing Ctrl+C causes the TUI to exit cleanly",
+        "Exit code is 0 on clean quit",
+        "No file descriptors or timers are left open after exit"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-monitor-error-state",
+      "name": "TUI Monitor — Error State Display",
+      "description": "The TUI monitor displays error information when events contain error payloads or the event file is unreadable",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Error events from quest-events.jsonl are displayed with a red indicator",
+        "If the event file becomes unreadable, an error banner is shown",
+        "The TUI does not crash when encountering malformed event lines",
+        "Error messages are truncated if longer than the terminal width"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-jsonl-schema",
+      "name": "Events — JSONL Event Schema Consistency",
+      "description": "All events written to quest-events.jsonl conform to a consistent schema with required fields",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Every event has a 'type' string field",
+        "Every event has a 'timestamp' ISO string field",
+        "Every event has a 'sessionId' or 'runId' field for grouping",
+        "No event lines are malformed or incomplete"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-feature-start",
+      "name": "Events — feature-start Event",
+      "description": "A feature-start event is emitted to quest-events.jsonl when the orchestrator begins work on a feature",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "feature-start event is emitted before the coder agent runs",
+        "Event payload includes featureId, featureName, and attempt number",
+        "Event includes timestamp",
+        "Event is a single valid JSON line"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-feature-pass",
+      "name": "Events — feature-pass Event",
+      "description": "A feature-pass event is emitted when the evaluator returns a pass verdict",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "feature-pass event is emitted after a successful evaluator run",
+        "Event payload includes featureId, durationMs, and tokenStats",
+        "Event includes timestamp",
+        "Event is a single valid JSON line"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-feature-fail",
+      "name": "Events — feature-fail Event",
+      "description": "A feature-fail event is emitted when the evaluator returns a fail verdict",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "feature-fail event is emitted after a failed evaluator run",
+        "Event payload includes featureId, failedCriteria list, and attempt number",
+        "Event includes timestamp",
+        "Event is a single valid JSON line"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-context-reset",
+      "name": "Events — context-reset Event",
+      "description": "A context-reset event is emitted when the orchestrator performs a context reset for a feature",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "context-reset event is emitted on each reset",
+        "Event payload includes featureId, resetCount, and reason",
+        "Event includes timestamp",
+        "Event is a single valid JSON line"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-agent-tool-call",
+      "name": "Events — agent-tool-call Event",
+      "description": "Agent tool calls (Read, Write, Bash, etc.) are emitted as events to quest-events.jsonl for TUI visibility",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Each tool call by the coder or evaluator agent emits an agent-tool-call event",
+        "Event payload includes tool name and a truncated input summary",
+        "Tool call result (success/error) is included in the event",
+        "High-frequency tools (Bash, Read) are not suppressed from the event stream"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-session-start",
+      "name": "Events — session-start Event",
+      "description": "A session-start event is emitted when the orchestrator loop begins",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "session-start event is emitted at the beginning of `quest run`",
+        "Event includes a unique sessionId",
+        "Event includes total pending feature count",
+        "Event is emitted before any feature-start events"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-session-end",
+      "name": "Events — session-end Event",
+      "description": "A session-end event is emitted when the orchestrator loop terminates (success or limit reached)",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "session-end event is emitted when the loop exits for any reason",
+        "Event includes reason: 'all-complete' | 'max-features' | 'error'",
+        "Event includes total features passed in this session",
+        "Event includes session duration in milliseconds"
+      ],
+      "passes": false
+    },
+    {
+      "id": "logger-structured-output",
+      "name": "Logger — Structured Output",
+      "description": "The logger module produces structured, colored terminal output with consistent prefixes for different log levels",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "INFO logs are printed with a neutral color prefix",
+        "WARN logs are printed with a yellow prefix",
+        "ERROR logs are printed with a red prefix",
+        "DEBUG logs are only printed when DEBUG env var is set"
+      ],
+      "passes": false
+    },
+    {
+      "id": "logger-timestamps",
+      "name": "Logger — Timestamps",
+      "description": "The logger optionally includes timestamps in log output, controlled by an env var or config flag",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "When QUEST_LOG_TIMESTAMPS=1 is set, timestamps appear in log output",
+        "Timestamps are formatted as HH:MM:SS",
+        "Timestamps appear before the log level prefix",
+        "When env var is not set, timestamps are omitted"
+      ],
+      "passes": false
+    },
+    {
+      "id": "logger-file-output",
+      "name": "Logger — File Output",
+      "description": "The logger can write output to a log file in addition to stdout, configurable via QUEST_LOG_FILE env var",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "When QUEST_LOG_FILE=/path/to/file is set, logs are written to that file",
+        "Log file entries do not include ANSI color codes",
+        "File is opened in append mode",
+        "File output does not suppress stdout output"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-api-key-not-logged",
+      "name": "Security — API Key Not Logged",
+      "description": "The ANTHROPIC_API_KEY environment variable is never printed to stdout, stderr, or any log file",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The API key value does not appear in quest-events.jsonl",
+        "The API key value does not appear in stdout during normal operation",
+        "The API key value does not appear in error messages",
+        "Agent system prompts do not include the literal API key value"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-sprint-contract-no-secret",
+      "name": "Security — Sprint Contract Contains No Secrets",
+      "description": "The sprint-contract.json file written to disk does not contain any sensitive data like API keys or tokens",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "sprint-contract.json does not include environment variable values",
+        "sprint-contract.json only contains feature metadata from features.json",
+        "The file can be safely committed to a public git repository",
+        "No secrets are embedded in the agent's initial prompt via the contract"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-path-traversal-prevention",
+      "name": "Security — Path Traversal Prevention",
+      "description": "The CLI resolves all user-provided paths safely, preventing path traversal attacks (e.g., `../../etc/passwd`)",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "All user-provided directory arguments are resolved to absolute paths using path.resolve()",
+        "The resolved path is validated to ensure it exists before use",
+        "Relative paths with `..` components are resolved correctly without special-casing",
+        "An error is shown when the resolved path is outside expected bounds (if applicable)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-eval-agent-sandbox",
+      "name": "Security — Evaluator Agent Does Not Modify Source",
+      "description": "The evaluator agent's tool access is restricted so it cannot write or delete source files",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The evaluator agent system prompt explicitly forbids writing or deleting files",
+        "The evaluator agent's tool list does not include Write or Edit tools",
+        "If the evaluator attempts to call Write, it is rejected with an error",
+        "Source files are unchanged after an evaluator run"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-parallel-evaluation",
+      "name": "Performance — Parallel Criterion Evaluation",
+      "description": "The evaluator agent can evaluate multiple acceptance criteria in parallel rather than sequentially",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Independent criteria checks are issued in parallel when possible",
+        "Total evaluation time is shorter than sequential evaluation of the same criteria",
+        "All criteria results are correctly collected regardless of order",
+        "Token usage is not significantly higher than sequential evaluation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-build-cache",
+      "name": "Performance — TypeScript Build Caching",
+      "description": "The coder agent uses incremental TypeScript compilation to avoid full rebuilds after each file change",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "tsconfig.json includes incremental: true or a composite build setup",
+        "Subsequent builds after small changes complete faster than full builds",
+        ".tsbuildinfo file is created and reused",
+        "Cache is not corrupted by agent file writes"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-event-write-batching",
+      "name": "Performance — Event Write Batching",
+      "description": "High-frequency events (e.g., agent-tool-call) are batched before flushing to quest-events.jsonl to reduce I/O overhead",
+      "category": "performance",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Events are buffered in memory and flushed in batches",
+        "Flush occurs at minimum every 500ms even if batch is small",
+        "Flush occurs immediately for high-priority events (feature-pass, feature-fail)",
+        "No events are lost if the process is killed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-agent-startup-time",
+      "name": "Performance — Agent Startup Time Under 3 Seconds",
+      "description": "The coder and evaluator agents initialize and make their first API call within 3 seconds of being invoked",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Agent startup (from invocation to first API call) takes less than 3 seconds",
+        "Import time for agent modules is measured and logged at DEBUG level",
+        "No synchronous file reads block the event loop during startup",
+        "The CLI does not preload unused agent modules"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-clear-error-messages",
+      "name": "UX — Clear, Actionable Error Messages",
+      "description": "All user-facing error messages include what went wrong and how to fix it",
+      "category": "ux",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Missing file errors include the expected file path",
+        "Invalid JSON errors include the file path and a hint to validate with `jq`",
+        "API errors include the HTTP status code and a link to Anthropic status page",
+        "All errors are printed to stderr, not stdout"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-progress-bar-live",
+      "name": "UX — Live Progress Bar During Orchestration",
+      "description": "The `quest run` command displays a live progress bar in the terminal during feature processing",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A progress bar is shown in the terminal while `quest run` is active",
+        "The bar updates after each feature completes",
+        "The bar shows current/total feature count",
+        "The bar renders correctly in 80-column terminals"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-feature-completion-notification",
+      "name": "UX — Feature Completion Notification",
+      "description": "A clear notification is printed when each feature completes (pass or fail) with key stats",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Pass notification includes feature ID, duration, and token usage",
+        "Fail notification includes feature ID and the first failing criterion",
+        "Pass is shown in green, fail in red",
+        "Notification is printed on its own line, not inline with other logs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-quit-gracefully-sigint",
+      "name": "UX — Graceful SIGINT Handling",
+      "description": "The `quest run` command handles Ctrl+C gracefully by flushing events and saving progress before exiting",
+      "category": "ux",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Pressing Ctrl+C during `quest run` flushes pending events to quest-events.jsonl",
+        "claude-progress.txt is saved with the latest state before exit",
+        "A message is printed: 'Interrupted — progress saved'",
+        "Exit code is 130 (standard for SIGINT)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-help-text",
+      "name": "UX — Help Text for All Commands",
+      "description": "Running `quest --help` or `quest <command> --help` displays useful help text for all commands and options",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "`quest --help` lists all subcommands with one-line descriptions",
+        "`quest run --help` lists all options with types and defaults",
+        "`quest init --help` lists --project-name and --description options",
+        "Help text is under 60 lines total"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-version-flag",
+      "name": "UX — --version Flag",
+      "description": "Running `quest --version` prints the current version from package.json",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "`quest --version` prints the version string from package.json",
+        "Output is a single line with just the version number",
+        "Version matches the version field in package.json",
+        "Exit code is 0"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-features-json-validation",
+      "name": "Data — features.json Schema Validation on Load",
+      "description": "features.json is validated against a Zod schema when loaded, with helpful error messages for invalid files",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Loading a features.json with missing required fields throws a ZodError",
+        "The error message identifies which field is missing",
+        "A features.json with all required fields loads without errors",
+        "Unknown extra fields in features.json are accepted (not rejected)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-progress-json-validation",
+      "name": "Data — claude-progress.txt Schema Validation on Load",
+      "description": "claude-progress.txt is validated against a Zod schema when loaded",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Loading a malformed claude-progress.txt throws a descriptive error",
+        "All required fields are validated: projectName, totalFeatures, passedFeatures, contextResets",
+        "Null values for currentFeatureId, lastCommitSha, lastSessionId are accepted",
+        "Invalid ISO timestamps in lastUpdated are rejected"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-eval-report-schema",
+      "name": "Data — eval-report.json Schema Validation",
+      "description": "eval-report.json is validated against a Zod schema when read by the orchestrator",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "verdict must be 'pass' or 'fail' (enum validation)",
+        "criteriaResults must be an array with at least one entry",
+        "Each criteriaResult entry must have criterion, result, and evidence fields",
+        "result in each entry must be 'pass' or 'fail'"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-features-unique-ids",
+      "name": "Data — Feature ID Uniqueness Validation",
+      "description": "On load, readFeaturesFile() validates that all feature IDs are unique and throws if duplicates exist",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "A features.json with duplicate feature IDs throws an error on load",
+        "The error message identifies the duplicate ID",
+        "A features.json with all unique IDs loads successfully",
+        "The check is case-sensitive (foo and FOO are considered unique)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-sprint-contract-schema",
+      "name": "Data — sprint-contract.json Schema Validation",
+      "description": "The coder agent validates sprint-contract.json against a schema before using it",
+      "category": "data",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Missing featureId in sprint-contract.json causes the coder to fail fast",
+        "Missing acceptanceCriteria array causes the coder to fail fast",
+        "Valid sprint-contract.json is processed without errors",
+        "Schema errors include the field name and expected type"
+      ],
+      "passes": false
+    },
+    {
+      "id": "typescript-strict-types",
+      "name": "TypeScript — Strict Mode Compliance",
+      "description": "All source files compile without errors under TypeScript strict mode",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `tsc --noEmit` exits with code 0",
+        "No `any` types are used without explicit `// eslint-disable` comments",
+        "All function return types are explicitly annotated or correctly inferred",
+        "No implicit `any` errors exist in the codebase"
+      ],
+      "passes": false
+    },
+    {
+      "id": "typescript-esm-imports",
+      "name": "TypeScript — ESM Import Extensions",
+      "description": "All TypeScript imports use .js extensions as required by the Node16 module resolution strategy",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "All relative imports end with .js extension",
+        "No imports use .ts extensions",
+        "The built dist/ files have correct import paths",
+        "Running the built CLI via `node dist/cli.js` works without module resolution errors"
+      ],
+      "passes": false
+    },
+    {
+      "id": "typescript-declaration-files",
+      "name": "TypeScript — Declaration Files Generated",
+      "description": "The build produces .d.ts declaration files for all exported types (enabled by declaration:true in tsconfig)",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "After `npm run build`, each .ts source file has a corresponding .d.ts in dist/",
+        "Declaration maps (.d.ts.map) are also generated",
+        "Exported types are usable by external TypeScript projects",
+        "Generated declarations include JSDoc comments from source"
+      ],
+      "passes": false
+    },
+    {
+      "id": "build-clean-command",
+      "name": "Build — npm run clean",
+      "description": "The `npm run clean` command removes the dist/ directory completely",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `npm run clean` removes the dist/ directory",
+        "After clean, dist/ does not exist on disk",
+        "Running `npm run clean` when dist/ does not exist does not throw an error",
+        "The script can be chained with build: `npm run clean && npm run build`"
+      ],
+      "passes": false
+    },
+    {
+      "id": "build-typecheck-command",
+      "name": "Build — npm run typecheck",
+      "description": "The `npm run typecheck` command runs tsc --noEmit without producing output files",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `npm run typecheck` runs TypeScript without emitting files",
+        "Exit code is 0 when no type errors exist",
+        "Exit code is non-zero when type errors exist",
+        "No files are created or modified in dist/"
+      ],
+      "passes": false
+    },
+    {
+      "id": "build-node-min-version",
+      "name": "Build — Node.js Minimum Version Enforcement",
+      "description": "The package.json engines field specifies Node >= 18 and the CLI checks this at startup",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "package.json has engines.node set to '>=18.0.0'",
+        "Running the CLI on Node 16 prints an error about the version requirement",
+        "Running the CLI on Node 18+ proceeds normally",
+        "The version check is run before any async operations"
+      ],
+      "passes": false
+    },
+    {
+      "id": "config-quest-anthropic-api-key",
+      "name": "Config — ANTHROPIC_API_KEY Environment Variable",
+      "description": "The CLI reads ANTHROPIC_API_KEY from the environment and passes it to the Claude Agent SDK",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "When ANTHROPIC_API_KEY is set, agents authenticate successfully",
+        "When ANTHROPIC_API_KEY is missing, a clear error is printed before any agent is run",
+        "The key is not hardcoded anywhere in source",
+        "The key is not logged or included in any event payload"
+      ],
+      "passes": false
+    },
+    {
+      "id": "config-quest-model",
+      "name": "Config — QUEST_MODEL Environment Variable",
+      "description": "The model used by agents is configurable via the QUEST_MODEL environment variable, defaulting to claude-opus-4-5",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Setting QUEST_MODEL=claude-sonnet-4-5 causes agents to use that model",
+        "When QUEST_MODEL is unset, agents default to a sensible model (e.g., claude-opus-4-5)",
+        "Invalid model names cause a clear error before any API calls",
+        "The active model is logged at INFO level on startup"
+      ],
+      "passes": false
+    },
+    {
+      "id": "config-quest-max-tokens",
+      "name": "Config — QUEST_MAX_TOKENS Environment Variable",
+      "description": "The max_tokens setting for agent API calls is configurable via QUEST_MAX_TOKENS",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Setting QUEST_MAX_TOKENS=8192 limits agent responses to 8192 tokens",
+        "The value is passed to the SDK as maxTokens",
+        "Non-numeric values cause an error on startup",
+        "Default is reasonable (e.g., 16384) when not set"
+      ],
+      "passes": false
+    },
+    {
+      "id": "config-debug-flag",
+      "name": "Config — DEBUG Environment Variable for Verbose Logging",
+      "description": "Setting DEBUG=quest enables verbose logging including agent turns, tool inputs, and API responses",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Setting DEBUG=quest shows detailed per-turn logs",
+        "Tool call inputs and outputs are logged at debug level",
+        "API response metadata is logged at debug level",
+        "Normal operation (DEBUG unset) is not polluted with debug output"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-agent-api-failure",
+      "name": "Error Handling — Agent API Failure Recovery",
+      "description": "When the Claude API returns a non-retryable error, the orchestrator logs the error and skips the feature (does not crash)",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "API 401 errors (auth failure) cause a helpful error message and process exit",
+        "API 429 errors (rate limit) trigger a retry with exponential backoff",
+        "API 500 errors cause the feature to be skipped with a warning",
+        "The error is recorded in quest-events.jsonl as a feature-fail event"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-malformed-eval-report",
+      "name": "Error Handling — Malformed eval-report.json",
+      "description": "When eval-report.json is missing or malformed after the evaluator runs, the orchestrator handles this gracefully",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Missing eval-report.json is treated as a feature-fail",
+        "Malformed eval-report.json is treated as a feature-fail",
+        "An error message explains that the evaluator did not write a valid report",
+        "The orchestrator continues to the next feature"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-coder-agent-timeout",
+      "name": "Error Handling — Coder Agent Timeout",
+      "description": "If the coder agent runs longer than a configurable timeout, the session is terminated and treated as a context reset",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A timeout is configurable via QUEST_AGENT_TIMEOUT_MS env var",
+        "Exceeding the timeout terminates the agent session",
+        "The timeout is treated as a context-reset trigger",
+        "A timeout event is emitted to quest-events.jsonl"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-git-commit-failure",
+      "name": "Error Handling — Git Commit Failure",
+      "description": "If the post-pass git commit fails (e.g., dirty working tree, no git repo), the orchestrator logs a warning and continues",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Git commit failure prints a warning to stderr",
+        "The orchestration loop continues to the next feature",
+        "lastCommitSha in progress is not updated on failure",
+        "The feature is still marked passes:true despite commit failure"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-missing-features-json",
+      "name": "Error Handling — Missing features.json on Run",
+      "description": "Running `quest run` in a directory without features.json prints a helpful error suggesting `quest init`",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The error message includes the expected file path",
+        "The error message suggests running `quest init` to create the file",
+        "The process exits with a non-zero exit code",
+        "No agents are started before the error check"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-missing-init-sh",
+      "name": "Error Handling — Missing init.sh Warning",
+      "description": "If init.sh is missing when `quest run` starts, a warning is printed but the loop continues",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A warning is printed when init.sh is not found",
+        "The warning suggests running `quest init` to regenerate it",
+        "The orchestration loop continues without init.sh if features.json and progress exist",
+        "The warning is printed only once, not on every feature"
+      ],
+      "passes": false
+    },
+    {
+      "id": "integration-full-run-cycle",
+      "name": "Integration — Full Init → Run → Pass Cycle",
+      "description": "A complete cycle of `quest init` followed by `quest run` successfully passes at least one feature end-to-end",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest init` followed by `quest run` completes without crashing",
+        "At least one feature transitions from passes:false to passes:true",
+        "claude-progress.txt shows passedFeatures >= 1 after the run",
+        "quest-events.jsonl contains at least one feature-pass event"
+      ],
+      "passes": false
+    },
+    {
+      "id": "integration-resume-after-interrupt",
+      "name": "Integration — Resume After Interrupt",
+      "description": "After interrupting a `quest run`, running `quest resume` continues from the last saved state",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "After Ctrl+C during `quest run`, claude-progress.txt reflects the last completed feature",
+        "Running `quest resume` picks up where the run left off",
+        "Already-passing features are not re-implemented",
+        "The resume completes additional features beyond what was done before interrupt"
+      ],
+      "passes": false
+    },
+    {
+      "id": "integration-eval-standalone",
+      "name": "Integration — Standalone Eval After Manual Fix",
+      "description": "After manually editing source, running `quest eval <id>` correctly evaluates the changes",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "`quest eval <id>` reads the current source files at eval time",
+        "A manual fix that satisfies criteria results in a pass verdict",
+        "An incomplete fix results in a fail verdict",
+        "eval-report.json is updated to reflect the new evaluation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "integration-monitor-while-running",
+      "name": "Integration — Monitor Displays Live Run",
+      "description": "Running `quest monitor` in one terminal while `quest run` executes in another shows live updates",
+      "category": "ui",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Events from the running `quest run` appear in the monitor within 1 second",
+        "Feature-start events cause the 'current feature' section to update",
+        "Feature-pass events cause the progress bar to advance",
+        "Token stats update as the coder agent works"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feature-schema-category-enum",
+      "name": "Feature Schema — Category Enum Validation",
+      "description": "Features with invalid category values (not in the allowed enum) are rejected on load",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Categories must be one of: auth, ui, api, data, performance, security, ux",
+        "A feature with category 'backend' (not in enum) causes a validation error",
+        "A feature with category 'api' loads successfully",
+        "The error message lists valid category values"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feature-schema-priority-enum",
+      "name": "Feature Schema — Priority Enum Validation",
+      "description": "Features with invalid priority values (not high/medium/low) are rejected on load",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Priority must be one of: high, medium, low",
+        "A feature with priority 'critical' causes a validation error",
+        "A feature with priority 'high' loads successfully",
+        "The error message lists valid priority values"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feature-schema-criteria-minimum",
+      "name": "Feature Schema — Minimum Acceptance Criteria",
+      "description": "Each feature must have at least 2 acceptance criteria; fewer causes a validation error",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A feature with 0 acceptance criteria fails validation",
+        "A feature with 1 acceptance criterion fails validation",
+        "A feature with 2 acceptance criteria passes validation",
+        "The error message states the minimum requirement"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feature-schema-id-format",
+      "name": "Feature Schema — ID Format Validation",
+      "description": "Feature IDs must be in kebab-case (lowercase letters, digits, hyphens only)",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "IDs with uppercase letters cause a validation error",
+        "IDs with underscores cause a validation error",
+        "IDs with spaces cause a validation error",
+        "Valid kebab-case IDs like 'my-feature-123' pass validation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-sprint-loop-counter",
+      "name": "Orchestrator — Sprint Loop Iteration Counter",
+      "description": "The orchestrator tracks a sprint counter incremented each time the main feature loop iterates",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "A sprint counter is initialized to 0 on orchestrator start",
+        "Counter increments by 1 for each feature attempt",
+        "Counter value is logged at DEBUG level each iteration",
+        "Counter is included in session-end event payload"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-skip-passing-on-resume",
+      "name": "Orchestrator — Skip Passing Features on Resume",
+      "description": "When resuming, the orchestrator skips over features that already have passes:true without re-evaluating them",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Features with passes:true are never passed to the coder agent",
+        "Features with passes:true are never passed to the evaluator agent",
+        "The orchestrator counts passing features at resume-time and logs the count",
+        "No extra events are emitted for already-passing features"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-self-healing",
+      "name": "Coder Agent — Self-Healing on Build Error",
+      "description": "When the coder agent introduces a build error, it detects the failure and attempts to fix it in subsequent turns",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder runs a build check after each significant file change",
+        "Build errors are fed back into the agent's context for the next turn",
+        "The agent attempts to fix the error rather than ignoring it",
+        "The agent does not loop more than 5 times trying to fix the same error"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-git-diff-awareness",
+      "name": "Coder Agent — Git Diff Awareness",
+      "description": "The coder agent can run `git diff` to review its own changes before finishing",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The coder agent has access to run git commands via the Bash tool",
+        "The agent runs `git diff` at least once before declaring completion",
+        "The diff is used to verify the implementation matches the sprint contract",
+        "The agent does not stage or commit changes (that is the orchestrator's job)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-multi-file-changes",
+      "name": "Coder Agent — Multi-File Change Support",
+      "description": "The coder agent can implement features that require changes across multiple source files",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The agent reads multiple files before planning changes",
+        "The agent can write changes to multiple files in one session",
+        "File changes are coherent (no broken imports between changed files)",
+        "The build passes after multi-file changes"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-notes-field",
+      "name": "Evaluator Agent — Notes Field in Report",
+      "description": "The eval-report.json includes a 'notes' field with a free-form summary of the evaluation rationale",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "eval-report.json has a 'notes' string field",
+        "Notes contain at least 20 characters of meaningful content",
+        "Notes summarize why the verdict was assigned",
+        "Notes are shown in `quest eval` command output"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-evidence-quality",
+      "name": "Evaluator Agent — Evidence Quality",
+      "description": "Evidence strings in criteriaResults are specific (include file paths, line references, or command output excerpts)",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Evidence for source-based criteria includes file path and relevant excerpt",
+        "Evidence for command-based criteria includes command output snippet",
+        "Evidence strings are at least 20 characters",
+        "Vague evidence like 'looks correct' is not accepted"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-atomic-write",
+      "name": "State — Atomic features.json Write",
+      "description": "writeFeaturesFile() uses atomic write (write to temp file then rename) to prevent corruption on crash",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Features are written to a temp file (e.g., features.json.tmp) first",
+        "The temp file is renamed to features.json after successful write",
+        "If the write fails, the original features.json is not corrupted",
+        "The temp file is cleaned up on success"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-progress-atomic-write",
+      "name": "State — Atomic claude-progress.txt Write",
+      "description": "writeProgress() uses atomic write to prevent corruption on crash",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Progress is written to a temp file first",
+        "The temp file is renamed to claude-progress.txt after successful write",
+        "If the write fails, the original claude-progress.txt is not corrupted",
+        "The temp file is cleaned up on both success and failure"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-state-machine",
+      "name": "TUI — Ink State Machine for App Component",
+      "description": "The TUI App component uses a clean React/Ink state machine with clearly defined states: loading, idle, running, error",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A 'loading' state is shown while event file is first read",
+        "An 'idle' state is shown when no active feature is running",
+        "A 'running' state is shown when a feature-start event is the latest",
+        "An 'error' state is shown when the event file cannot be read"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-feature-history-list",
+      "name": "TUI — Feature History List",
+      "description": "The TUI monitor displays a scrollable history of recently processed features with pass/fail indicators",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Up to 10 most recently completed features are shown",
+        "Each row shows feature ID, verdict (✓/✗), and duration",
+        "Passed features are shown in green, failed in red",
+        "The list scrolls or truncates gracefully in small terminals"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-tool-call-feed",
+      "name": "TUI — Live Tool Call Feed",
+      "description": "The TUI monitor shows a live feed of the most recent agent tool calls",
+      "category": "ui",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The last 5 tool calls are shown in the TUI",
+        "Each entry shows tool name and a truncated input summary",
+        "The feed updates as new tool-call events arrive",
+        "Long tool inputs are truncated with '…' to fit terminal width"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-session-elapsed",
+      "name": "TUI — Session Elapsed Time Counter",
+      "description": "The TUI monitor shows a running elapsed time for the current session",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "An elapsed time counter is displayed in the TUI header",
+        "Counter increments every second",
+        "Counter resets to 0:00 when a new session starts",
+        "Format is MM:SS or HH:MM:SS for long sessions"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-responsive-layout",
+      "name": "TUI — Responsive Layout for Different Terminal Widths",
+      "description": "The TUI monitor adapts its layout for narrow terminals (< 80 cols) and wide terminals (> 120 cols)",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "On narrow terminals, the tool-call feed is hidden to save space",
+        "On wide terminals, stats and history are shown side-by-side",
+        "No text is clipped or wraps awkwardly at 80 columns",
+        "Layout change happens dynamically on terminal resize"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-agent-sdk-integration",
+      "name": "SDK — Claude Agent SDK Integration",
+      "description": "Agents are implemented using @anthropic-ai/claude-agent-sdk with correct SDK API usage",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent uses the SDK's agent runner (not raw HTTP)",
+        "The evaluator agent uses the SDK's agent runner",
+        "Tool results are passed back to the SDK correctly for multi-turn sessions",
+        "The SDK version in package.json is compatible with the API being called"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-streaming-tool-events",
+      "name": "SDK — Streaming Tool Events",
+      "description": "The agent SDK streams events as they arrive, allowing the orchestrator to emit real-time events to quest-events.jsonl",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Tool call events are received and processed as they stream from the API",
+        "Each tool call triggers an agent-tool-call event in quest-events.jsonl before the tool result is returned",
+        "The orchestrator does not wait for the full session to complete before emitting events",
+        "Stream errors are handled without crashing the process"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-tool-registry",
+      "name": "SDK — Tool Registry for Agents",
+      "description": "Each agent type (coder, evaluator) has a defined set of tools registered with the SDK",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "The coder agent has Read, Write, Edit, Bash, and Glob tools registered",
+        "The evaluator agent has Read, Bash, and Glob tools registered (no Write/Edit)",
+        "Each tool has a description string used in the agent's tool list",
+        "Unregistered tool calls by agents return a tool-not-found error"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-system-prompt-coder",
+      "name": "SDK — Coder Agent System Prompt",
+      "description": "The coder agent has a well-structured system prompt that describes its role, capabilities, and constraints",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "System prompt explains that the agent implements features from sprint-contract.json",
+        "System prompt instructs the agent to verify builds pass after changes",
+        "System prompt instructs the agent to signal context-reset when confused",
+        "System prompt is under 2000 tokens"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-system-prompt-evaluator",
+      "name": "SDK — Evaluator Agent System Prompt",
+      "description": "The evaluator agent has a well-structured system prompt describing its role as an objective verifier",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "System prompt explains that the agent evaluates features against acceptance criteria",
+        "System prompt instructs the agent to base judgments on evidence, not assumptions",
+        "System prompt instructs the agent to write eval-report.json as its final action",
+        "System prompt explicitly forbids modifying source files"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-max-features-guard",
+      "name": "Orchestrator — maxFeatures Guard",
+      "description": "The orchestrator stops processing new features once the maxFeatures limit is reached",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "When maxFeatures=3 and 3 features have been attempted, the loop exits",
+        "Already-passing features from a previous run do not count toward the limit",
+        "A 'max features reached' message is printed",
+        "A session-end event with reason 'max-features' is emitted"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-error-isolation",
+      "name": "Orchestrator — Error Isolation Per Feature",
+      "description": "An unhandled error in the coder or evaluator agent for one feature does not crash the entire orchestration loop",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "An exception thrown by the coder agent is caught and logged",
+        "The failed feature is recorded as a failure and the loop continues to the next",
+        "An error event is emitted to quest-events.jsonl",
+        "The process does not exit due to one feature's agent error"
+      ],
+      "passes": false
+    },
+    {
+      "id": "feature-browser-test-url",
+      "name": "Feature Schema — browserTestUrl Field",
+      "description": "Features with browserTestUrl are marked as requiring browser-based evaluation in addition to static analysis",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "browserTestUrl is an optional string field on Feature",
+        "null is a valid value for browserTestUrl",
+        "A URL like '/dashboard' is a valid value",
+        "The evaluator agent uses browserTestUrl as a hint for where to verify UI behavior"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-jsonl-rotation",
+      "name": "Events — JSONL File Rotation",
+      "description": "quest-events.jsonl is rotated when it exceeds a configurable size limit to prevent unbounded growth",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "When quest-events.jsonl exceeds QUEST_EVENT_MAX_BYTES (default 10MB), a new file is started",
+        "Old file is renamed to quest-events.jsonl.1 (or similar)",
+        "The monitor reads from the current file, not rotated ones",
+        "Rotation is transparent to the orchestrator"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-jsonl-truncation-on-init",
+      "name": "Events — JSONL File Truncation on New Session",
+      "description": "When `quest run` starts a new session, quest-events.jsonl is truncated (not appended) to keep history manageable",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `quest run` truncates quest-events.jsonl before emitting session-start",
+        "Previous session events are not visible after truncation",
+        "The truncation only happens on `quest run`, not on `quest resume`",
+        "A backup of the old file is optionally saved (configurable via QUEST_KEEP_EVENTS)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-history-snapshot",
+      "name": "Context Manager — History Snapshot for Reset",
+      "description": "Before a context reset, the ContextManager saves a snapshot of the conversation history that can be injected into the new session",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A snapshot of the last N turns is saved before resetting",
+        "The snapshot is injected into the new coder agent session as context",
+        "Snapshot size is bounded to avoid exceeding token limits",
+        "The snapshot is stored in memory only (not written to disk)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "context-manager-conversation-id",
+      "name": "Context Manager — Conversation ID Tracking",
+      "description": "The ContextManager tracks a unique conversation ID for each agent session for correlation in logs and events",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Each agent session is assigned a unique conversationId (UUID or similar)",
+        "The conversationId is included in all events emitted during that session",
+        "After a context reset, a new conversationId is assigned",
+        "The conversationId is logged at DEBUG level on session start"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-session-id",
+      "name": "Orchestrator — Session ID for Run Grouping",
+      "description": "Each `quest run` / `quest resume` invocation generates a unique sessionId used to group all events from that invocation",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "A unique sessionId is generated at orchestrator start",
+        "All events emitted during the session include the sessionId",
+        "The sessionId is stored in claude-progress.txt as lastSessionId",
+        "Running `quest run` twice generates two different sessionIds"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-last-session-id",
+      "name": "Orchestrator — lastSessionId in Progress",
+      "description": "claude-progress.txt stores the lastSessionId to allow correlating the last run with its events",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "lastSessionId in claude-progress.txt is updated at the end of each session",
+        "The value matches the sessionId in session-end event payload",
+        "lastSessionId is null before any run",
+        "The field persists correctly through multiple runs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-header-project-name",
+      "name": "TUI — Header Shows Project Name",
+      "description": "The TUI monitor header displays the project name from features.json",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Project name is shown in the TUI header area",
+        "Project name is read from features.json or quest-events.jsonl",
+        "Header is always visible regardless of terminal height",
+        "Header updates if project name changes between events (edge case)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-default-dir-cwd",
+      "name": "CLI — Default Directory is CWD",
+      "description": "All CLI commands default to process.cwd() when no directory argument is provided",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Running `quest status` with no args uses the current working directory",
+        "Running `quest run` with no args uses the current working directory",
+        "Running `quest monitor` with no args uses the current working directory",
+        "The resolved path is logged at DEBUG level"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-binary-shebang",
+      "name": "CLI — Binary Shebang Line",
+      "description": "The compiled cli.js file begins with #!/usr/bin/env node for direct execution",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "dist/cli.js starts with #!/usr/bin/env node",
+        "The file is executable after `npm run build`",
+        "Running `./dist/cli.js --version` works without `node` prefix",
+        "The bin entry in package.json points to dist/cli.js"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-no-test-removal",
+      "name": "Coder Agent — Does Not Remove Tests or Features",
+      "description": "The coder agent system prompt instructs it never to remove existing tests, remove passing features from features.json, or delete existing source files without explicit instructions",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "System prompt explicitly forbids removing test files",
+        "System prompt forbids setting passes:true on features not yet evaluated",
+        "System prompt forbids deleting source files that were not created in this session",
+        "The evaluator flags any missing files as a criterion failure"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-lock",
+      "name": "Orchestrator — Feature Lock File",
+      "description": "The orchestrator writes a .quest-lock file during active processing to prevent two instances running simultaneously",
+      "category": "security",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        ".quest-lock is created when `quest run` or `quest resume` starts",
+        ".quest-lock is removed when the session ends normally",
+        "Attempting to run a second `quest run` while .quest-lock exists prints an error and exits",
+        ".quest-lock contains the PID of the owning process for stale lock detection"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-stale-lock-detection",
+      "name": "Orchestrator — Stale Lock Detection",
+      "description": "If .quest-lock exists but the owning PID is no longer running, the orchestrator removes it and proceeds",
+      "category": "security",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Lock file PID is checked against running processes",
+        "If the PID is not running, the lock is removed and a warning is printed",
+        "If the PID is running, the lock is honored and an error is shown",
+        "After stale lock removal, `quest run` proceeds normally"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-startup-lazy-imports",
+      "name": "Performance — Lazy Imports for Heavy Modules",
+      "description": "Heavy modules (e.g., Ink/React for TUI) are imported lazily only when the monitor command is used",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The Ink and React modules are imported inside the monitor command action, not at CLI startup",
+        "Running `quest status` does not import TUI-related modules",
+        "Module load time for `quest status` is under 500ms",
+        "Dynamic import() is used for TUI module loading"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-sdk-connection-reuse",
+      "name": "Performance — SDK HTTP Connection Reuse",
+      "description": "The Anthropic SDK client is instantiated once and reused across multiple agent calls within a session",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The Anthropic SDK client is created once per orchestrator session",
+        "The same client instance is passed to both coder and evaluator agents",
+        "Connection pools are not exhausted during long sessions",
+        "Client is not recreated on context resets"
+      ],
+      "passes": false
+    },
+    {
+      "id": "accessibility-color-blind-mode",
+      "name": "Accessibility — No Color-Only Information",
+      "description": "The TUI and CLI output do not rely solely on color to convey information (symbols or text labels are also used)",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Pass/fail indicators use both color AND symbol (✓/✗) not just color",
+        "Priority levels are shown as text labels ('high', 'medium', 'low') not just colored text",
+        "Progress bar includes a numeric percentage in addition to the colored bar",
+        "All status information is readable in a terminal with colors disabled"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-no-color-env",
+      "name": "UX — NO_COLOR Environment Variable Support",
+      "description": "Setting NO_COLOR=1 disables all ANSI color codes in CLI output",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "When NO_COLOR=1 is set, chalk disables color codes",
+        "Output is plain text with no ANSI escape sequences",
+        "All information remains readable without color",
+        "The TUI monitor also disables colors when NO_COLOR is set"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-gitignore-quest-files",
+      "name": "Data — .gitignore Excludes Sensitive Quest Files",
+      "description": "The quest harness ensures sprint-contract.json, eval-report.json, and .quest-lock are added to .gitignore",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "sprint-contract.json is listed in .gitignore",
+        "eval-report.json is listed in .gitignore",
+        ".quest-lock is listed in .gitignore",
+        "quest-events.jsonl is listed in .gitignore (too large for version control)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-totalfeatures-sync",
+      "name": "State — totalFeatures Synced with features.json Length",
+      "description": "totalFeatures in claude-progress.txt is updated whenever features are added or removed from features.json",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "After `quest init`, totalFeatures equals the number of features in features.json",
+        "If features.json is manually edited to add features, the next `quest run` detects the mismatch",
+        "A warning is printed when totalFeatures in progress does not match features.json length",
+        "totalFeatures is updated to match features.json at run start"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-percent-complete-log",
+      "name": "Orchestrator — Percent Complete Log Line",
+      "description": "After each feature completes, the orchestrator logs '(X/Y) Z% complete'",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "A progress line like '(3/200) 1% complete' is printed after each feature",
+        "Percentage is rounded to the nearest integer",
+        "The line is printed to stdout",
+        "The line appears after both pass and fail events"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-run-output-mode",
+      "name": "CLI — --output-mode Option for Machine-Readable Output",
+      "description": "The `quest run` command supports --output-mode=json to emit machine-readable JSON lines to stdout",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest run --output-mode json` prints events as JSON lines to stdout",
+        "Each JSON line has at minimum type and timestamp fields",
+        "Human-readable color output is suppressed in JSON mode",
+        "This mode is useful for piping into other tools"
+      ],
+      "passes": false
+    },
+    {
+      "id": "error-rate-limit-backoff",
+      "name": "Error Handling — Exponential Backoff on Rate Limit",
+      "description": "When the Anthropic API returns a 429 rate limit error, the orchestrator retries with exponential backoff",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "First retry waits 1 second",
+        "Second retry waits 2 seconds",
+        "Third retry waits 4 seconds",
+        "After 5 retries, the request is abandoned and the feature is skipped"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-test-creation",
+      "name": "Coder Agent — Test File Creation",
+      "description": "When implementing features that require automated tests, the coder agent creates appropriate test files",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The coder agent creates test files when the feature's acceptance criteria mention testable behavior",
+        "Test files are placed in the correct directory structure (e.g., src/__tests__/ or *.test.ts)",
+        "Tests use the project's existing test framework (if any)",
+        "Created tests are relevant to the feature being implemented"
+      ],
+      "passes": false
+    },
+    {
+      "id": "evaluator-agent-test-execution",
+      "name": "Evaluator Agent — Test Execution for Verification",
+      "description": "The evaluator agent runs existing tests as part of verifying acceptance criteria",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The evaluator runs `npm test` (if defined) and includes results in evidence",
+        "Test failures count as criterion failures in criteriaResults",
+        "Test output is summarized (not pasted in full) in evidence strings",
+        "Absence of a test script is noted but does not fail all criteria"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-keyboard-navigation",
+      "name": "TUI — Keyboard Navigation for Feature List",
+      "description": "The TUI monitor supports up/down arrow keys to scroll through the feature history list",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Pressing ↑ scrolls the feature history list up",
+        "Pressing ↓ scrolls the feature history list down",
+        "The selected/visible range is highlighted",
+        "Scrolling beyond the list boundaries does nothing (no wrap)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-filter-by-status",
+      "name": "TUI — Filter Feature List by Status",
+      "description": "The TUI monitor allows filtering the feature history to show only passing or failing features",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Pressing 'p' filters to show only passing features",
+        "Pressing 'f' filters to show only failing features",
+        "Pressing 'a' shows all features",
+        "The active filter is shown in the TUI footer"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-timeout",
+      "name": "Orchestrator — Per-Feature Wall-Clock Timeout",
+      "description": "Each feature has a maximum wall-clock time limit; if exceeded, the feature is abandoned and treated as a context reset",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Default timeout is 10 minutes per feature",
+        "QUEST_FEATURE_TIMEOUT_MS env var overrides the default",
+        "Timeout triggers a context reset (not a permanent failure)",
+        "A timeout event is emitted to quest-events.jsonl"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-pause-resume",
+      "name": "Orchestrator — Pause and Resume via Signal",
+      "description": "The orchestrator pauses feature processing when SIGUSR1 is received and resumes on SIGUSR2",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Sending SIGUSR1 to the `quest run` process pauses after the current feature completes",
+        "A 'Paused' message is printed when paused",
+        "Sending SIGUSR2 resumes the loop",
+        "Pause state is not persisted to disk"
+      ],
+      "passes": false
+    },
+    {
+      "id": "events-schema-version",
+      "name": "Events — Schema Version in All Events",
+      "description": "All events include a 'v' (version) field for forward compatibility when the event schema evolves",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Every event has a 'v' field set to '1' (or current schema version)",
+        "The monitor ignores events with unrecognized versions gracefully",
+        "Schema version is documented in a comment in the events module",
+        "Upgrading the schema version increments the 'v' field"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-backup",
+      "name": "State — features.json Backup Before Write",
+      "description": "Before overwriting features.json, a backup copy (features.json.bak) is created",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "features.json.bak is created before each write to features.json",
+        "The backup contains the previous content of features.json",
+        "Only one backup is kept (not a rolling history)",
+        "The backup is not committed to git (listed in .gitignore)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-retry-on-connection-error",
+      "name": "SDK — Retry on Network Connection Error",
+      "description": "Transient network errors (ECONNRESET, ETIMEDOUT) during API calls trigger automatic retries",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "ECONNRESET triggers a retry after 2 seconds",
+        "ETIMEDOUT triggers a retry after 5 seconds",
+        "Maximum 3 retries before treating as a permanent failure",
+        "Retry attempts are logged with attempt number"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-completions",
+      "name": "CLI — Shell Completion Support",
+      "description": "The quest CLI supports shell completion for bash/zsh via `quest completion`",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest completion bash` outputs a bash completion script",
+        "Running `quest completion zsh` outputs a zsh completion script",
+        "Completion suggests valid subcommands (init, run, resume, status, eval, feature, monitor)",
+        "Completion suggests feature IDs from features.json for the `eval` and `feature` commands"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-features-json-sort",
+      "name": "Data — Features Sorted by Priority on Write",
+      "description": "When writing features.json, features are sorted by priority (high first) then by their original array order within each tier",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "After writeFeaturesFile(), high-priority features appear before medium",
+        "Medium-priority features appear before low",
+        "Within the same priority, original array order is preserved",
+        "Sort is stable (equal elements maintain relative order)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-dry-run-plan",
+      "name": "Orchestrator — Dry Run Plan Output",
+      "description": "The dry-run mode prints a numbered list of features that would be processed in order",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Each planned feature is listed with its sequence number, ID, and priority",
+        "The plan respects the same ordering as the live run",
+        "Already-passing features are shown as '(skipped — already passing)'",
+        "Total planned feature count is printed at the end"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-no-eval-in-code",
+      "name": "Security — No eval() or new Function() in Source",
+      "description": "No source file uses eval() or new Function() to execute dynamic code",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Grep for eval( in src/ returns no matches",
+        "Grep for new Function( in src/ returns no matches",
+        "JSON.parse() is used instead of eval() for parsing JSON strings",
+        "The build and runtime are safe from code injection via these vectors"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-no-hardcoded-keys",
+      "name": "Security — No Hardcoded API Keys or Secrets",
+      "description": "No source file contains hardcoded API keys, passwords, or other secrets",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Grep for 'sk-ant-' in src/ returns no matches",
+        "Grep for 'password' or 'secret' as string literals in src/ returns no matches",
+        "All secrets come from environment variables",
+        "CI checks for accidental secret commits"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-concurrent-safety",
+      "name": "Orchestrator — Concurrent Write Safety for features.json",
+      "description": "Concurrent writes to features.json from multiple processes are prevented by the lock file mechanism",
+      "category": "security",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Only the process holding .quest-lock writes to features.json",
+        "A second `quest run` process is blocked by the lock before it can read or write features.json",
+        "The lock covers the full feature-read → implement → evaluate → write cycle",
+        "Lock is released even if an unhandled exception occurs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-rollback-on-cascade-fail",
+      "name": "Coder Agent — Rollback on Cascading Build Failure",
+      "description": "If the coder agent's changes cause more than 5 new TypeScript errors (a cascade), it rolls back using git checkout",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The coder counts new type errors introduced by its changes",
+        "More than 5 new errors triggers a git checkout of modified files",
+        "After rollback, the coder signals a context reset",
+        "Rollback is logged as a warn-level event"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-event-detail-panel",
+      "name": "TUI — Event Detail Side Panel",
+      "description": "The TUI monitor shows a detail panel for the selected event when the user presses Enter",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Pressing Enter on a feature-fail event shows the failing criteria in a side panel",
+        "Pressing Enter on a feature-pass event shows token stats in a side panel",
+        "The panel is dismissible with Escape",
+        "The panel adapts to terminal width"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-stats-summary",
+      "name": "Orchestrator — Final Stats Summary",
+      "description": "At the end of a session, the orchestrator prints a stats summary with total time, tokens used, and features passed",
+      "category": "ux",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Total session duration is printed in HH:MM:SS format",
+        "Total input and output tokens are printed",
+        "Number of features passed in this session is printed",
+        "Number of context resets that occurred is printed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "config-quest-log-level",
+      "name": "Config — QUEST_LOG_LEVEL Environment Variable",
+      "description": "The QUEST_LOG_LEVEL env var controls log verbosity: debug, info, warn, error",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "QUEST_LOG_LEVEL=debug shows all log messages",
+        "QUEST_LOG_LEVEL=warn shows only warn and error messages",
+        "QUEST_LOG_LEVEL=error shows only error messages",
+        "Default is 'info' when not set"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-status-bar",
+      "name": "TUI — Status Bar at Bottom",
+      "description": "The TUI monitor has a fixed status bar at the bottom showing keyboard shortcuts",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "A status bar is rendered at the bottom of the TUI",
+        "It shows 'q: quit' as a hint",
+        "It shows 'a/p/f: filter' hints",
+        "The bar is always visible regardless of scroll position"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-eval-update-features",
+      "name": "CLI — quest eval Updates features.json on Pass",
+      "description": "When `quest eval <id>` returns a pass verdict, it updates features.json to set passes:true for that feature",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "A pass verdict from standalone `quest eval` sets passes:true in features.json",
+        "passedFeatures in claude-progress.txt is incremented",
+        "A confirmation message is printed indicating features.json was updated",
+        "A fail verdict does NOT update features.json"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-eval-commit-option",
+      "name": "CLI — quest eval --commit Option",
+      "description": "The `quest eval <id> --commit` option creates a git commit after a successful evaluation",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest eval <id> --commit` creates a git commit on pass",
+        "Commit message includes the feature ID",
+        "The option is not available in default mode (explicit opt-in)",
+        "Failed evaluation does not create a commit even with --commit"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-max-turns-guard",
+      "name": "SDK — Maximum Turns Guard for Agent Sessions",
+      "description": "Agent sessions are limited to a maximum number of turns (configurable) to prevent infinite loops",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "Default max turns is 50 per agent session",
+        "QUEST_MAX_TURNS env var overrides the default",
+        "Exceeding max turns terminates the session and signals a context reset",
+        "Max turns exceeded event is emitted to quest-events.jsonl"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-filter-by-category",
+      "name": "State — Filter Features by Category",
+      "description": "A utility function filterByCategory() returns features matching a given category",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "filterByCategory('auth', features) returns only auth features",
+        "filterByCategory('nonexistent', features) returns an empty array",
+        "The function does not mutate the original features array",
+        "Multiple categories can be filtered by passing an array"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-stats",
+      "name": "State — Feature Statistics Utility",
+      "description": "A getFeatureStats() utility returns a breakdown of features by category and priority",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "getFeatureStats() returns counts per category",
+        "getFeatureStats() returns counts per priority",
+        "getFeatureStats() returns passing/failing counts",
+        "The function is pure (no side effects)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-emit-token-summary",
+      "name": "Orchestrator — Token Summary Event per Feature",
+      "description": "After each feature completes, the orchestrator emits a token-summary event with input/output/total counts",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "token-summary event is emitted after each feature (pass or fail)",
+        "Event includes inputTokens, outputTokens, and totalTokens",
+        "Event includes the featureId it corresponds to",
+        "TUI monitor displays these stats in the token panel"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ux-welcome-banner",
+      "name": "UX — Welcome Banner on quest run",
+      "description": "The `quest run` command prints a banner with the project name, total features, and model being used",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "A banner is printed at the start of `quest run`",
+        "Banner includes project name from features.json",
+        "Banner includes total feature count and how many are already passing",
+        "Banner includes the model name being used"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-category-log",
+      "name": "Orchestrator — Feature Category in Log Lines",
+      "description": "Log lines for feature start/end include the feature category for easier filtering",
+      "category": "ux",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Feature-start log includes [category] tag",
+        "Feature-pass log includes [category] tag",
+        "Feature-fail log includes [category] tag",
+        "Category tags are consistent with features.json values"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-init-auto-detect-stack",
+      "name": "quest init — Auto-Detect Project Tech Stack",
+      "description": "The initializer detects the tech stack (Node/Python/Go/etc.) from existing project files and tailors init.sh accordingly",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Presence of package.json triggers npm-based init.sh",
+        "Presence of requirements.txt triggers pip-based init.sh",
+        "Presence of go.mod triggers go-based init.sh",
+        "When stack is undetected, a generic init.sh with comments is created"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-status-json-output",
+      "name": "quest status — JSON Output Mode",
+      "description": "Running `quest status --json` emits the progress data as a single JSON object for scripting",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "`quest status --json` prints valid JSON to stdout",
+        "JSON includes projectName, totalFeatures, passedFeatures, and percentage fields",
+        "JSON includes the next pending feature ID if any",
+        "Exit code is 0 regardless of pass rate"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-skip-list",
+      "name": "Orchestrator — Feature Skip List via Env Var",
+      "description": "QUEST_SKIP_FEATURES env var accepts a comma-separated list of feature IDs to skip during a run",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Features listed in QUEST_SKIP_FEATURES are never selected for implementation",
+        "Skipped features are not marked as passing",
+        "A warning is printed listing which features are being skipped",
+        "Skip list is evaluated before priority-based selection"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-copy-feature-id",
+      "name": "TUI — Copy Feature ID to Clipboard",
+      "description": "Pressing 'c' in the TUI monitor copies the selected feature ID to the system clipboard",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Pressing 'c' triggers a clipboard write for the selected feature ID",
+        "A brief confirmation message is shown in the status bar",
+        "Clipboard operation failure shows an error message instead of crashing",
+        "The 'c' shortcut is listed in the status bar"
+      ],
+      "passes": false
+    },
+    {
+      "id": "sdk-system-prompt-initializer",
+      "name": "SDK — Initializer Agent System Prompt",
+      "description": "The initializer agent has a detailed system prompt instructing it to create comprehensive, well-structured scaffold files",
+      "category": "api",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "System prompt instructs generation of 200+ features",
+        "System prompt specifies the exact JSON schema for features.json",
+        "System prompt instructs setting passes:false on all features",
+        "System prompt includes the project description in its context"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-progress-context-resets-field",
+      "name": "Data — contextResets Field in Progress",
+      "description": "The contextResets field in claude-progress.txt tracks cumulative context resets across the entire project lifetime",
+      "category": "data",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "contextResets starts at 0 in a fresh progress file",
+        "contextResets is incremented each time a context reset occurs",
+        "contextResets persists across `quest resume` invocations",
+        "contextResets is shown in `quest status` output"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-attempt-counter",
+      "name": "Orchestrator — Per-Feature Attempt Counter",
+      "description": "The orchestrator tracks how many times each feature has been attempted (including retries and context resets)",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Attempt counter starts at 1 for the first try",
+        "Counter increments on each retry and each context reset",
+        "Attempt counter is included in feature-start event payload",
+        "When retryLimit is exceeded, attempt counter reflects the final attempt"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-color-scheme",
+      "name": "TUI — Consistent Color Scheme",
+      "description": "The TUI monitor uses a consistent color scheme across all components: green for pass, red for fail, yellow for in-progress, blue for info",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "All pass states use chalk.green or equivalent",
+        "All fail/error states use chalk.red or equivalent",
+        "Active/in-progress states use chalk.yellow or equivalent",
+        "Informational text uses chalk.blue or chalk.cyan"
+      ],
+      "passes": false
+    },
+    {
+      "id": "state-features-filter-pending",
+      "name": "State — getPendingFeatures() Utility",
+      "description": "A getPendingFeatures() utility returns all features with passes:false in priority order",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Returns only features where passes is false or undefined",
+        "Result is sorted: high priority first, then medium, then low",
+        "Returns empty array when all features are passing",
+        "Function is pure with no side effects"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-json-parse-streaming",
+      "name": "Performance — Streaming JSONL Parse for Large Event Files",
+      "description": "The TUI monitor parses quest-events.jsonl line-by-line (streaming) rather than loading the entire file into memory",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Event file is read as a stream, not with readFileSync",
+        "Memory usage does not grow proportionally with event file size",
+        "Parsing correctly handles lines that span multiple read() chunks",
+        "Malformed lines are skipped with a debug log, not crashing the parser"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-eval-report-ownership",
+      "name": "Security — eval-report.json Written Only by Evaluator",
+      "description": "The coder agent cannot write eval-report.json; only the evaluator agent is permitted to create it",
+      "category": "security",
+      "priority": "high",
+      "acceptanceCriteria": [
+        "eval-report.json is deleted before the coder agent runs",
+        "The orchestrator rejects an eval-report.json created before the evaluator was invoked",
+        "Coder agent system prompt explicitly forbids writing eval-report.json",
+        "A pre-existing eval-report.json from a previous run is always deleted before coder invocation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-post-init-run",
+      "name": "Orchestrator — Automatic Run After Init",
+      "description": "The `quest run` command automatically calls `quest init` if features.json or claude-progress.txt are missing",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Missing features.json triggers automatic initialization before the run",
+        "The user is prompted to confirm auto-init (or QUEST_AUTO_INIT=1 bypasses prompt)",
+        "After auto-init, the run loop begins immediately",
+        "If init fails, the run does not proceed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tui-percentile-sparkline",
+      "name": "TUI — Token Usage Sparkline",
+      "description": "The TUI monitor shows a mini sparkline chart of token usage per feature over the session",
+      "category": "ui",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "A sparkline is rendered using Unicode block characters (▁▂▃▄▅▆▇█)",
+        "Each bar in the sparkline represents one feature's total token usage",
+        "The sparkline updates after each feature completes",
+        "Sparkline renders correctly when fewer than 8 features have been processed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "cli-feature-list-command",
+      "name": "quest feature list — List All Features",
+      "description": "A `quest feature list` subcommand lists all features with their ID, name, priority, and pass status",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest feature list` prints all features from features.json",
+        "Each row shows ID, priority, category, and ✓/○ status",
+        "Output can be filtered by category with --category=api",
+        "Output can be filtered by priority with --priority=high"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-commit-message-format",
+      "name": "Orchestrator — Git Commit Message Format",
+      "description": "Git commits created by the orchestrator follow the Conventional Commits format",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Commit messages follow the format: 'feat(<feature-id>): <feature-name>'",
+        "Messages are under 72 characters on the first line",
+        "Body of the commit includes the acceptance criteria that passed",
+        "Commits are signed off correctly (no --no-verify bypass)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "coder-agent-dependency-awareness",
+      "name": "Coder Agent — Dependency Graph Awareness",
+      "description": "The coder agent reads and understands the existing import graph before making changes that could break imports",
+      "category": "api",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "The coder reads files that import the file it is modifying",
+        "Changes to exported interfaces are checked for backward compatibility",
+        "If an import would break, the coder updates the importing file",
+        "Build verification confirms no broken imports remain"
+      ],
+      "passes": false
+    },
+    {
+      "id": "data-events-replay",
+      "name": "Data — Event Replay for Debugging",
+      "description": "A `quest replay` command (or debug flag) replays quest-events.jsonl events through the TUI at a configurable speed",
+      "category": "data",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest monitor --replay` plays back events from the beginning",
+        "Replay speed is configurable via --speed=2x (default 1x)",
+        "Replay pauses at the end of the event file",
+        "Replay is visually distinguishable from live mode (shows 'REPLAY' indicator)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "orchestrator-feature-priority-override",
+      "name": "Orchestrator — Feature Priority Override via CLI",
+      "description": "The `quest run --force <feature-id>` option forces a specific feature to be implemented next, overriding priority order",
+      "category": "api",
+      "priority": "low",
+      "acceptanceCriteria": [
+        "Running `quest run --force my-feature-id` processes that feature first",
+        "After the forced feature, normal priority ordering resumes",
+        "Forcing an already-passing feature prints a warning and skips it",
+        "Forcing a nonexistent feature ID prints an error and exits"
+      ],
+      "passes": false
+    },
+    {
+      "id": "performance-cold-start-benchmark",
+      "name": "Performance — Cold Start Benchmark Under 1 Second",
+      "description": "The CLI cold start time (from invocation to first output) is under 1 second on a modern machine",
+      "category": "performance",
+      "priority": "medium",
+      "acceptanceCriteria": [
+        "Running `time quest --version` completes in under 1 second",
+        "Running `time quest status` completes in under 1 second for a project with 200 features",
+        "No synchronous network calls occur during startup",
+        "Node module resolution is optimized (no excessive dynamic imports at startup)"
+      ],
+      "passes": false
+    }
+  ]
+}
