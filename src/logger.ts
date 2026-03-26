@@ -47,12 +47,13 @@ function summarizeInput(toolName: string, input: unknown): string {
   return ''
 }
 
-export type AgentLabel = 'init' | 'coder' | 'eval'
+export type AgentLabel = 'init' | 'coder' | 'eval' | 'reviewer'
 
 const AGENT_LABEL: Record<AgentLabel, string> = {
-  init:  chalk.blue('[init]'),
-  coder: chalk.cyan('[code]'),
-  eval:  chalk.magenta('[eval]'),
+  init:     chalk.blue('[init]'),
+  coder:    chalk.cyan('[code]'),
+  eval:     chalk.magenta('[eval]'),
+  reviewer: chalk.yellow('[review]'),
 }
 
 interface WorkerLogState {
@@ -89,14 +90,16 @@ export function printAgentBanner(
   workerId = 0,
 ): void {
   const labels: Record<AgentLabel, string> = {
-    init:  'Initializer',
-    coder: 'Coder',
-    eval:  'Evaluator',
+    init:     'Initializer',
+    coder:    'Coder',
+    eval:     'Evaluator',
+    reviewer: 'Reviewer',
   }
   const colors: Record<AgentLabel, (s: string) => string> = {
-    init:  chalk.blue,
-    coder: chalk.cyan,
-    eval:  chalk.magenta,
+    init:     chalk.blue,
+    coder:    chalk.cyan,
+    eval:     chalk.magenta,
+    reviewer: chalk.yellow,
   }
   const color = colors[agent]
   const name = labels[agent]
@@ -169,6 +172,7 @@ export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0)
       success: !message.is_error,
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
+      cacheReadTokens: usage?.cacheReadInputTokens,
       workerId,
     })
   }

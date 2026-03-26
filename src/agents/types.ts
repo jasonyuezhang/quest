@@ -17,6 +17,8 @@ export interface Feature {
   acceptanceCriteria: string[]
   /** If set, evaluator uses Playwright to test this URL */
   browserTestUrl?: string
+  /** Feature IDs that must pass before this feature can be implemented */
+  dependsOn?: string[]
   /** ONLY the evaluator agent may set this to true */
   passes: boolean
   implementedAt?: string
@@ -91,6 +93,29 @@ export interface CriterionResult {
 }
 
 /**
+ * A single issue found during code review.
+ */
+export interface ReviewIssue {
+  category: 'security' | 'error-handling' | 'duplication' | 'naming' | 'style'
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  description: string
+  location: string
+  suggestion: string
+}
+
+/**
+ * Review report written by the reviewer agent.
+ * Orchestrator reads this to decide whether to send the feature back to coder.
+ */
+export interface ReviewReport {
+  featureId: string
+  issues: ReviewIssue[]
+  summary: string
+  hasCriticalIssues: boolean
+  reviewedAt: string
+}
+
+/**
  * Evaluation report written by the evaluator agent.
  * Orchestrator reads this to determine whether to commit or retry.
  */
@@ -101,6 +126,8 @@ export interface EvalReport {
   notes: string
   evaluatedAt: string
   sessionId: string
+  /** Classification of the failure cause (only set when verdict is 'fail') */
+  failureCategory?: string
 }
 
 /** What an agent session produces (returned to orchestrator) */
@@ -137,6 +164,7 @@ export interface WorkerResult {
   commitSha?: string
   durationMs: number
   error?: string
+  failureCategory?: string
 }
 
 /** Orchestrator configuration */
@@ -152,6 +180,10 @@ export interface OrchestratorOptions {
   dryRun?: boolean
   /** Override model for all agents */
   model?: string
-  /** Number of features to implement in parallel (default: 1 = sequential) */
-  concurrency?: number
+  /** Maximum parallel workers — scheduler auto-adjusts based on DAG width (default: 4) */
+  maxConcurrency?: number
+  /** Run a reviewer agent between coder and evaluator (default: false) */
+  review?: boolean
+  /** Maximum context window tokens for dynamic budgeting (default: 200000) */
+  maxContextTokens?: number
 }

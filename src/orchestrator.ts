@@ -9,6 +9,7 @@ import type { ProjectPlan } from './planner.js'
 import { runInitializerAgent } from './agents/initializer.js'
 import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
+import { runReviewerAgent, readReviewReport } from './agents/reviewer.js'
 import { ContextManager } from './context/manager.js'
 import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
 import { readProgress, writeProgress, createInitialProgress } from './state/progress.js'
@@ -17,9 +18,12 @@ import {
   writeSprintContract,
   writeCurrentFeature,
   readEvalReport,
+  writeEvalReport,
   cleanSprintArtifacts,
   writeSprintCompletion,
 } from './sprint/contracts.js'
+import { classifyFailure } from './failure-classifier.js'
+import type { FailureCategory } from './failure-classifier.js'
 import { printAgentBanner } from './logger.js'
 import { initEventLog, emit } from './events.js'
 import {
@@ -29,12 +33,71 @@ import {
   getWorktreeSha,
   syncFilesToWorktree,
   cleanupAllWorktrees,
+  type WorktreeInfo,
 } from './worktree.js'
+import {
+  buildDAG,
+  planNextBatch,
+  getNewlyUnblocked,
+  estimateTotalTime,
+  formatDAGSummary,
+  type DAG,
+} from './scheduler.js'
+import { Tracer } from './trace.js'
+import { AgentGit } from './agent-git/index.js'
 
 const execAsync = promisify(exec)
 
+// ---------------------------------------------------------------------------
+// Worker pool: dynamic worktree creation/reuse
+// ---------------------------------------------------------------------------
+
+class WorkerPool {
+  private available: WorktreeInfo[] = []
+  private nextId = 1
+
+  /** Acquire a worktree — reuse from pool or create new */
+  async acquire(mainDir: string): Promise<WorktreeInfo> {
+    const existing = this.available.pop()
+    if (existing) {
+      // Reset to latest main HEAD before reuse
+      try {
+        const { stdout } = await execAsync('git rev-parse HEAD', { cwd: mainDir })
+        const mainHead = stdout.trim()
+        await execAsync(`git reset --hard ${mainHead}`, { cwd: existing.dir })
+      } catch {
+        // Best-effort reset
+      }
+      return existing
+    }
+
+    return createWorktree(mainDir, this.nextId++)
+  }
+
+  /** Release a worktree back to the pool */
+  release(worktree: WorktreeInfo): void {
+    this.available.push(worktree)
+  }
+
+  /** Destroy all pooled worktrees */
+  async destroyAll(mainDir: string): Promise<void> {
+    await Promise.all(this.available.map(wt => removeWorktree(mainDir, wt)))
+    this.available = []
+  }
+
+  get poolSize(): number {
+    return this.available.length
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+
 export class Orchestrator {
   private opts: Required<OrchestratorOptions>
+  private tracer: Tracer
+  private agentGit: AgentGit
 
   constructor(opts: OrchestratorOptions) {
     this.opts = {
@@ -43,9 +106,13 @@ export class Orchestrator {
       maxContextResets: 5,
       dryRun: false,
       model: 'claude-sonnet-4-6',
-      concurrency: 1,
+      maxConcurrency: 4,
+      review: false,
+      maxContextTokens: 200_000,
       ...opts,
     }
+    this.tracer = new Tracer(opts.projectDir)
+    this.agentGit = new AgentGit(opts.projectDir)
   }
 
   /**
@@ -73,7 +140,11 @@ export class Orchestrator {
     printAgentBanner('init', 1, 1, effectiveName)
 
     const ctxMgr = new ContextManager()
-    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr)
+    const traceSession = this.tracer.startSession('init', `Initialize ${effectiveName}`, {
+      model: 'claude-sonnet-4-6', userPrompt: effectiveDescription,
+    })
+    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr, traceSession)
+    this.tracer.endSession(traceSession)
 
     if (!result.success) {
       throw new Error(`Initializer failed: ${result.error}`)
@@ -90,16 +161,17 @@ export class Orchestrator {
 
   /**
    * Full orchestration loop: implements features until all pass or limits are reached.
-   * Delegates to runParallel when concurrency > 1.
+   * Delegates to runDAGScheduled when maxConcurrency > 1.
    */
   async run(): Promise<void> {
-    const { projectDir, maxFeatures, dryRun, concurrency } = this.opts
+    const { projectDir, maxFeatures, dryRun, maxConcurrency } = this.opts
     const runStart = Date.now()
 
     initEventLog(projectDir)
+    await this.agentGit.init()
 
-    if (concurrency > 1) {
-      await this.runParallel()
+    if (maxConcurrency > 1) {
+      await this.runDAGScheduled()
       return
     }
 
@@ -133,7 +205,7 @@ export class Orchestrator {
         continue
       }
 
-      const verdict = await this.implementFeature(next)
+      const { verdict, failureCategory } = await this.implementFeature(next)
 
       if (verdict === 'pass') {
         implemented++
@@ -143,7 +215,7 @@ export class Orchestrator {
         console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
         await this.markFeatureSkipped(next)
       }
-      emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0 })
+      emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0, failureCategory })
     }
 
     const summary = await this.getStatus()
@@ -153,150 +225,206 @@ export class Orchestrator {
   }
 
   /**
-   * Parallel orchestration: dispatch features to isolated git worktrees.
-   * Each worker runs coder → evaluator independently. Passing features are
-   * cherry-picked back onto the main branch.
+   * DAG-aware parallel orchestration using Promise.race dispatch loop.
+   *
+   * Instead of fixed-size batches with Promise.allSettled (which wastes time
+   * waiting for the slowest worker), this dispatches new work the instant any
+   * worker finishes and new features become unblocked.
+   *
+   * The scheduler auto-adjusts worker count based on DAG width — if only 3
+   * features are ready, only 3 workers run even if maxConcurrency is 8.
    */
-  private async runParallel(): Promise<void> {
-    const { projectDir, maxFeatures, concurrency, dryRun } = this.opts
+  private async runDAGScheduled(): Promise<void> {
+    const { projectDir, maxFeatures, maxConcurrency, dryRun } = this.opts
     const runStart = Date.now()
-
-    console.log(chalk.bold(`\n⚡ Parallel mode: ${concurrency} workers`))
 
     // Clean up stale worktrees from previous crashed runs
     await cleanupAllWorktrees(projectDir)
 
     const featuresData = await readFeaturesFile(projectDir)
-    const pending = featuresData.features
-      .filter(f => !f.passes)
-      .slice(0, maxFeatures)
+    const allFeatures = featuresData.features.slice(0, maxFeatures)
+    const total = featuresData.features.length
 
+    // Build the dependency DAG
+    let dag: DAG
+    try {
+      dag = buildDAG(allFeatures)
+    } catch (err) {
+      console.error(chalk.red(`DAG error: ${err instanceof Error ? err.message : err}`))
+      process.exit(1)
+    }
+
+    const effectiveWorkers = Math.min(dag.maxParallelism, maxConcurrency)
+    console.log(chalk.bold(`\n⚡ DAG scheduler: up to ${effectiveWorkers} workers`))
+    console.log(chalk.gray(formatDAGSummary(dag, maxConcurrency)))
+
+    emit({
+      type: 'dag_built',
+      levels: dag.maxLevel + 1,
+      criticalPath: dag.criticalPath,
+      maxParallelism: dag.maxParallelism,
+      totalFeatures: total,
+    })
+
+    const pending = allFeatures.filter(f => !f.passes)
     if (pending.length === 0) {
       console.log(chalk.green('\n✅ All features already implemented!'))
-      emit({ type: 'run_complete', passing: countPassing(featuresData.features), total: featuresData.features.length, durationMs: 0 })
+      emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: 0 })
       return
     }
 
-    const total = featuresData.features.length
     console.log(chalk.gray(`  ${pending.length} features pending, ${total} total`))
-    emit({ type: 'run_start', projectName: featuresData.projectName, total, concurrency })
+    emit({ type: 'run_start', projectName: featuresData.projectName, total, concurrency: effectiveWorkers })
 
     if (dryRun) {
-      console.log(chalk.gray('\n[dry-run] Would dispatch in parallel:'))
-      for (let i = 0; i < pending.length; i++) {
-        const f = pending[i]
-        const wId = (i % concurrency) + 1
-        console.log(chalk.gray(`  [W${wId}] ${f.id} (${f.priority})`))
-      }
+      const estimate = estimateTotalTime(dag, maxConcurrency)
+      console.log(chalk.gray(`\n[dry-run] Estimated wall-clock: ${(estimate.estimatedMs / 60_000).toFixed(0)} min`))
+      console.log(chalk.gray(`  Critical path: ${(estimate.criticalPathMs / 60_000).toFixed(0)} min`))
+      console.log(chalk.gray(`  Parallel efficiency: ${(estimate.parallelEfficiency * 100).toFixed(0)}%`))
       return
     }
 
-    // Create worktrees
-    console.log(chalk.gray(`  Creating ${concurrency} worktrees...`))
-    const worktrees = await Promise.all(
-      Array.from({ length: concurrency }, (_, i) => createWorktree(projectDir, i + 1)),
-    )
+    // State tracking
+    const completed = new Set<string>()
+    // Pre-populate with already-passing features
+    for (const f of featuresData.features) {
+      if (f.passes) completed.add(f.id)
+    }
 
+    const inFlight = new Map<string, Promise<{ featureId: string; result: WorkerResult }>>()
+    const workerPool = new WorkerPool()
+    const retryQueue: Feature[] = []
+    const worktreeMap = new Map<string, WorktreeInfo>() // featureId → worktree
     let implemented = 0
     let failed = 0
-    let cursor = 0
-    const retryQueue: Feature[] = []
 
     try {
-      while (cursor < pending.length || retryQueue.length > 0) {
-        // Fill a batch from pending features (or retry queue)
-        const batch: Feature[] = []
-        while (batch.length < concurrency && cursor < pending.length) {
-          batch.push(pending[cursor])
-          cursor++
-        }
-        while (batch.length < concurrency && retryQueue.length > 0) {
-          batch.push(retryQueue.shift()!)
-        }
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        // Plan next batch based on current state
+        const inFlightSet = new Set(inFlight.keys())
+        const batch = planNextBatch(dag, completed, inFlightSet, maxConcurrency)
 
-        if (batch.length === 0) break
-
-        // Print batch header
-        console.log(chalk.bold(`\n◆ Batch: ${batch.map(f => f.id).join(', ')}`))
-        for (let i = 0; i < batch.length; i++) {
-          const f = batch[i]
-          const wt = worktrees[i]
-          emit({ type: 'feature_start', featureId: f.id, featureName: f.name, priority: f.priority, index: cursor - batch.length + i + 1, total, workerId: wt.workerId })
-          console.log(chalk.gray(`  [W${wt.workerId}] ${f.id} — ${f.description.slice(0, 60)}`))
+        if (batch.workerCount > 0) {
+          emit({
+            type: 'batch_plan',
+            ready: batch.features.length,
+            dispatching: batch.workerCount,
+            inFlight: inFlight.size,
+            reason: batch.reason,
+          })
+          console.log(chalk.gray(`\n  scheduler: ${batch.reason}`))
         }
 
-        // Dispatch batch in parallel
-        const results = await Promise.allSettled(
-          batch.map((feature, i) => this.runFeatureInWorktree(worktrees[i], feature)),
-        )
+        // Dispatch new features
+        for (const feature of batch.features) {
+          const worktree = await workerPool.acquire(projectDir)
+          worktreeMap.set(feature.id, worktree)
 
-        // Process results sequentially (writes to main must be serialized)
-        for (let i = 0; i < results.length; i++) {
-          const result = results[i]
-          const feature = batch[i]
+          emit({
+            type: 'feature_start',
+            featureId: feature.id,
+            featureName: feature.name,
+            priority: feature.priority,
+            index: completed.size + inFlight.size + 1,
+            total,
+            workerId: worktree.workerId,
+          })
+          console.log(chalk.bold(`  [W${worktree.workerId}] ${feature.id}`) + chalk.gray(` — ${feature.description.slice(0, 60)}`))
 
-          if (result.status === 'rejected') {
-            failed++
-            console.log(chalk.red(`\n✗ [W${worktrees[i].workerId}] ${feature.id} — worker error: ${result.reason}`))
-            emit({ type: 'feature_done', featureId: feature.id, verdict: 'fail', attempt: 1, durationMs: 0, workerId: worktrees[i].workerId })
-            continue
+          // Launch worker — wrap result with featureId for identification
+          const featureId = feature.id
+          const promise = this.runFeatureInWorktree(worktree, feature)
+            .then(result => ({ featureId, result }))
+            .catch(err => ({
+              featureId,
+              result: {
+                workerId: worktree.workerId,
+                feature,
+                verdict: 'fail' as const,
+                durationMs: 0,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            }))
+
+          inFlight.set(featureId, promise)
+        }
+
+        // If nothing in-flight and nothing ready, we're done (or blocked)
+        if (inFlight.size === 0) {
+          // Check if there are features that can never be reached (failed dependencies)
+          const remaining = allFeatures.filter(f => !f.passes && !completed.has(f.id))
+          if (remaining.length > 0 && retryQueue.length === 0) {
+            console.log(chalk.yellow(`\n⚠ ${remaining.length} features blocked by failed dependencies`))
           }
+          break
+        }
 
-          const wr = result.value
+        // Wait for the first worker to finish (Promise.race)
+        const { featureId, result: wr } = await Promise.race(inFlight.values())
 
-          if (wr.verdict === 'pass' && wr.commitSha) {
-            // Cherry-pick the passing commit onto main
-            const picked = await cherryPickToMain(projectDir, wr.commitSha)
-            if (picked) {
-              implemented++
-              console.log(chalk.green(`\n✓ [W${wr.workerId}] ${feature.id} passed (${(wr.durationMs / 1000).toFixed(0)}s)`))
-            } else {
-              // Cherry-pick conflict — queue for sequential retry
-              console.log(chalk.yellow(`\n⚠ [W${wr.workerId}] ${feature.id} passed but cherry-pick conflicted — queued for retry`))
-              retryQueue.push(feature)
+        // Remove from in-flight
+        inFlight.delete(featureId)
+        const worktree = worktreeMap.get(featureId)!
+        worktreeMap.delete(featureId)
+
+        if (wr.verdict === 'pass' && wr.commitSha) {
+          // Cherry-pick the passing commit onto main
+          const picked = await cherryPickToMain(projectDir, wr.commitSha)
+          if (picked) {
+            implemented++
+            completed.add(featureId)
+            console.log(chalk.green(`\n✓ [W${wr.workerId}] ${featureId} passed (${(wr.durationMs / 1000).toFixed(0)}s)`))
+
+            // Check for newly unblocked features
+            const unblocked = getNewlyUnblocked(dag, featureId, completed, new Set(inFlight.keys()))
+            for (const uid of unblocked) {
+              emit({ type: 'feature_unblocked', featureId: uid, unblockedBy: featureId })
+              console.log(chalk.blue(`  ↳ unblocked: ${uid}`))
             }
           } else {
-            failed++
-            console.log(chalk.red(`\n✗ [W${wr.workerId}] ${feature.id} failed${wr.error ? `: ${wr.error}` : ''}`))
+            // Cherry-pick conflict — queue for sequential retry
+            console.log(chalk.yellow(`\n⚠ [W${wr.workerId}] ${featureId} passed but cherry-pick conflicted — queued for retry`))
+            retryQueue.push(wr.feature)
           }
-
-          emit({ type: 'feature_done', featureId: feature.id, verdict: wr.verdict, attempt: 1, durationMs: wr.durationMs, workerId: wr.workerId })
+        } else {
+          failed++
+          completed.add(featureId) // mark as completed (failed) so we don't re-dispatch
+          console.log(chalk.red(`\n✗ [W${wr.workerId}] ${featureId} failed${wr.error ? `: ${wr.error}` : ''}`))
         }
 
-        // Reset worktrees to latest main HEAD for next batch
-        for (const wt of worktrees) {
-          try {
-            // Get current main HEAD
-            const { stdout } = await execAsync('git rev-parse HEAD', { cwd: projectDir })
-            const mainHead = stdout.trim()
-            // Reset worktree branch to main HEAD so next batch starts from latest
-            await execAsync(`git reset --hard ${mainHead}`, { cwd: wt.dir })
-          } catch {
-            // Best-effort sync — feature isolation still works per-batch
-          }
-        }
+        emit({ type: 'feature_done', featureId, verdict: wr.verdict, attempt: 1, durationMs: wr.durationMs, failureCategory: wr.failureCategory, workerId: wr.workerId })
+
+        // Release worktree back to pool
+        workerPool.release(worktree)
       }
 
       // Process retry queue sequentially in main worktree
       for (const feature of retryQueue) {
         console.log(chalk.yellow(`\n↻ Sequential retry: ${feature.id}`))
-        const verdict = await this.implementFeature(feature)
+        const { verdict, failureCategory } = await this.implementFeature(feature)
         if (verdict === 'pass') {
           implemented++
+          completed.add(feature.id)
         } else {
           failed++
         }
+        emit({ type: 'feature_done', featureId: feature.id, verdict, attempt: 1, durationMs: 0, failureCategory })
       }
     } finally {
       // Always clean up worktrees
       console.log(chalk.gray('\n  Cleaning up worktrees...'))
-      await Promise.all(worktrees.map(wt => removeWorktree(projectDir, wt)))
+      // Clean up any in-flight worktrees that weren't released
+      for (const [, wt] of worktreeMap) {
+        workerPool.release(wt)
+      }
+      await workerPool.destroyAll(projectDir)
     }
 
     const summary = await this.getStatus()
     const elapsed = ((Date.now() - runStart) / 1000).toFixed(0)
     console.log(
-      chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing (${elapsed}s, ${concurrency} workers)`),
+      chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing (${elapsed}s)`),
     )
     emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: Date.now() - runStart })
   }
@@ -336,10 +464,15 @@ export class Orchestrator {
 
       // Run coder in worktree
       printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}`, wId)
-      const ctxMgr = new ContextManager()
+      const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
+      ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
+      const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${attemptLabel}`, {
+        featureId: feature.id, workerId: wId, model: 'claude-sonnet-4-6',
+      })
       try {
-        await runCoderAgent(worktreeDir, feature.id, ctxMgr)
+        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined, coderTrace)
       } catch (err) {
+        this.tracer.endSession(coderTrace)
         if (!(err instanceof ContextResetNeededError)) {
           console.log(chalk.red(`  [W${wId}] ✗ Coder failed: ${err instanceof Error ? err.message : err}`))
           continue
@@ -348,11 +481,16 @@ export class Orchestrator {
         console.log(chalk.yellow(`  [W${wId}] ↺ Context reset — retrying`))
         continue
       }
+      this.tracer.endSession(coderTrace)
 
       // Run evaluator in worktree
       printAgentBanner('eval', 2, 2, feature.id, wId)
-      const evalCtx = new ContextManager()
-      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx)
+      const evalCtx = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
+      const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
+        featureId: feature.id, workerId: wId, model: 'claude-sonnet-4-6',
+      })
+      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace)
+      this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
         console.log(chalk.red(`  [W${wId}] ✗ Evaluator failed: ${evalResult.error}`))
@@ -386,10 +524,17 @@ export class Orchestrator {
         }
       }
 
-      // Log failing criteria
+      // Log failing criteria and classify
       for (const cr of report.criteriaResults.filter(r => r.result === 'fail')) {
         console.log(chalk.red(`    [W${wId}] ✗ ${cr.criterion}`))
       }
+      const failingEvidence = report.criteriaResults
+        .filter(r => r.result === 'fail')
+        .map(r => r.evidence)
+        .join(' ')
+      const worktreeFailureCategory = classifyFailure(failingEvidence)
+      const reportWithCategory = { ...report, failureCategory: worktreeFailureCategory }
+      await writeEvalReport(worktreeDir, reportWithCategory).catch(() => {})
     }
 
     return {
@@ -426,8 +571,9 @@ export class Orchestrator {
   /**
    * Implement a single feature: write sprint contract, run coder, run evaluator.
    * Retries up to retryLimit times on evaluator failure.
+   * Uses failure category to decide retry strategy.
    */
-  async implementFeature(feature: Feature): Promise<'pass' | 'fail'> {
+  async implementFeature(feature: Feature): Promise<{ verdict: 'pass' | 'fail'; failureCategory?: string }> {
     const { projectDir, retryLimit } = this.opts
 
     // Clean up artifacts from any previous attempt
@@ -452,23 +598,62 @@ export class Orchestrator {
       // progress file may not exist yet
     }
 
+    // ── Agent-Git: set up version control for this feature ───────────
+    const extSession = await this.agentGit.createExternalSession(`feature/${feature.id}`)
+    const agSession = await this.agentGit.startSession(extSession.id, { featureId: feature.id })
+
+    // Checkpoint the pre-implementation state as the baseline
+    const baselineCheckpoint = await this.agentGit.checkpoint({
+      description: `Baseline before implementing ${feature.id}`,
+      autoCommit: false,
+      metadata: { featureId: feature.id, phase: 'baseline' },
+    })
+    console.log(chalk.gray(`  agent-git: baseline checkpoint ${baselineCheckpoint.id.slice(0, 8)}`))
+
+    let lastFailureCategory: FailureCategory | undefined
+    let retryHints: string | undefined
+
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const attemptLabel = attempt > 0 ? ` retry ${attempt}/${retryLimit}` : ''
 
       if (attempt > 0) {
-        console.log(chalk.yellow(`\n↻ Retry ${attempt}/${retryLimit} for ${feature.id}`))
+        console.log(chalk.yellow(`\n↻ Retry ${attempt}/${retryLimit} for ${feature.id}${lastFailureCategory ? ` [${lastFailureCategory}]` : ''}`))
+
+        // Rollback to baseline before retrying — ensures clean state
+        const rollbackResult = await this.agentGit.rollbackTo(baselineCheckpoint.id, {
+          preserveTimeline: true,
+          preserveBranchName: `abandoned/${feature.id}/attempt-${attempt}`,
+        })
+        console.log(
+          chalk.gray(`  agent-git: rolled back to baseline`) +
+            (rollbackResult.preservedBranch
+              ? chalk.gray(` (preserved on ${rollbackResult.preservedBranch})`)
+              : ''),
+        )
+
         await cleanSprintArtifacts(projectDir)
-        // Re-write contract for fresh attempt
         await writeSprintContract(projectDir, { ...contract, startedAt: new Date().toISOString() })
       }
 
+      const totalSteps = this.opts.review ? 3 : 2
+
       // Step 1: Run coder with context reset support
-      printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}`)
-      const coderResult = await this.runCoderWithResets(feature)
+      // Retry strategy based on failure category:
+      //   tool_error   → retry immediately (no changes)
+      //   logic_bug    → retry with additional hints in the prompt
+      //   timeout      → retry with extended max_turns (increase by 50%)
+      printAgentBanner('coder', 1, totalSteps, `${feature.id}${attemptLabel}`)
+      const coderResult = await this.runCoderWithResets(feature, retryHints)
       if (!coderResult.success) {
         console.log(chalk.red(`✗ Coder failed: ${coderResult.error}`))
         continue
       }
+
+      // Checkpoint after coder completes
+      await this.agentGit.checkpoint({
+        description: `Coder completed ${feature.id} (attempt ${attempt + 1})`,
+        metadata: { featureId: feature.id, phase: 'post-coder', attempt: attempt + 1 },
+      })
 
       console.log(
         chalk.gray(
@@ -477,10 +662,69 @@ export class Orchestrator {
         ),
       )
 
-      // Step 2: Run evaluator independently
-      printAgentBanner('eval', 2, 2, feature.id)
-      const ctxMgr = new ContextManager()
-      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr)
+      // Step 2 (optional): Run reviewer between coder and evaluator
+      if (this.opts.review) {
+        printAgentBanner('reviewer', 2, totalSteps, feature.id)
+        const reviewCtx = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id })
+        const reviewResult = await runReviewerAgent(projectDir, feature.id, reviewCtx)
+
+        if (!reviewResult.success) {
+          console.log(chalk.yellow(`⚠ Reviewer failed: ${reviewResult.error} — continuing to evaluator`))
+        } else {
+          const reviewReport = await readReviewReport(projectDir)
+          if (reviewReport) {
+            console.log(chalk.gray(`  reviewer: ${(reviewResult.durationMs / 1000).toFixed(1)}s — ${reviewReport.issues.length} issue(s)`))
+
+            if (reviewReport.hasCriticalIssues) {
+              // Build fix instructions from critical issues
+              const criticalIssues = reviewReport.issues.filter(i => i.severity === 'critical')
+              const fixInstructions = criticalIssues
+                .map(i => `- [${i.category}] ${i.description} (${i.location})\n  Fix: ${i.suggestion}`)
+                .join('\n')
+
+              console.log(chalk.red(`  ✗ Reviewer found ${criticalIssues.length} critical issue(s) — sending back to coder`))
+              for (const issue of criticalIssues) {
+                console.log(chalk.red(`    ✗ [${issue.category}] ${issue.description}`))
+              }
+
+              // Re-run coder with specific fix instructions
+              printAgentBanner('coder', 1, totalSteps, `${feature.id} (review fix)`)
+              const fixPrompt = `CONTEXT RESET: Fix critical code review issues for feature: ${feature.id}
+
+The code reviewer found the following critical issues that must be fixed before evaluation:
+
+${fixInstructions}
+
+Read sprint-contract.json for the acceptance criteria, then fix ONLY these critical issues. Do not rewrite the entire implementation — make targeted fixes. When done, update sprint-completion.json with notes about what you fixed.`
+
+              const fixCoderResult = await this.runCoderWithResets(feature, fixPrompt)
+              if (!fixCoderResult.success) {
+                console.log(chalk.red(`✗ Coder fix failed: ${fixCoderResult.error}`))
+                continue
+              }
+              console.log(chalk.gray(`  coder (fix): ${(fixCoderResult.durationMs / 1000).toFixed(1)}s`))
+            } else {
+              // Log any non-critical issues for visibility
+              const highIssues = reviewReport.issues.filter(i => i.severity === 'high')
+              if (highIssues.length > 0) {
+                console.log(chalk.yellow(`  ⚠ ${highIssues.length} high-severity issue(s) (non-blocking):`))
+                for (const issue of highIssues) {
+                  console.log(chalk.yellow(`    ⚠ [${issue.category}] ${issue.description}`))
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Step 3 (or 2): Run evaluator independently
+      printAgentBanner('eval', totalSteps, totalSteps, feature.id)
+      const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id })
+      const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
+        featureId: feature.id, model: 'claude-sonnet-4-6',
+      })
+      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace)
+      this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
         console.log(chalk.red(`✗ Evaluator failed: ${evalResult.error}`))
@@ -502,10 +746,42 @@ export class Orchestrator {
       )
       emit({ type: 'eval_verdict', featureId: feature.id, verdict: report.verdict, criteriaResults: report.criteriaResults })
 
+      if (report.verdict === 'fail') {
+        // Classify the failure and write it back to eval-report
+        const failingEvidence = report.criteriaResults
+          .filter(r => r.result === 'fail')
+          .map(r => r.evidence)
+          .join(' ')
+        lastFailureCategory = classifyFailure(failingEvidence)
+        const reportWithCategory = { ...report, failureCategory: lastFailureCategory }
+        await writeEvalReport(projectDir, reportWithCategory).catch(() => {})
+        console.log(chalk.gray(`  failure category: ${lastFailureCategory}`))
+
+        // Prepare retry strategy based on failure category
+        if (lastFailureCategory === 'logic_bug') {
+          const failingCriteria = report.criteriaResults
+            .filter(r => r.result === 'fail')
+            .map(r => `- ${r.criterion}: ${r.evidence}`)
+            .join('\n')
+          retryHints = `Previous attempt failed with logic errors. Address these specific issues:\n${failingCriteria}`
+        } else if (lastFailureCategory === 'timeout') {
+          // Extended max_turns is handled by runCoderWithResets using extra reset budget
+          retryHints = undefined
+        } else {
+          retryHints = undefined
+        }
+      }
+
       if (report.verdict === 'pass') {
-        // Evaluator already set passes:true in features.json
-        // Commit the feature
+        // Checkpoint the passing state
+        await this.agentGit.checkpoint({
+          description: `${feature.id} passed evaluation`,
+          metadata: { featureId: feature.id, phase: 'eval-pass', verdict: 'pass' },
+        })
+
+        // Evaluator already set passes:true in features.json — commit the feature
         await this.commitFeature(feature, evalResult.sessionId)
+        await this.agentGit.endSession(agSession.id)
 
         // Update progress
         try {
@@ -521,7 +797,7 @@ export class Orchestrator {
           // non-fatal
         }
 
-        return 'pass'
+        return { verdict: 'pass' }
       }
 
       // Print failing criteria for visibility
@@ -531,7 +807,8 @@ export class Orchestrator {
       }
     }
 
-    return 'fail'
+    await this.agentGit.endSession(agSession.id)
+    return { verdict: 'fail', failureCategory: lastFailureCategory }
   }
 
   /**
@@ -544,21 +821,23 @@ export class Orchestrator {
    */
   private async runCoderWithResets(
     feature: Feature,
+    fixPrompt?: string,
   ): Promise<{ success: boolean; error?: string; durationMs: number; totalInputTokens: number }> {
-    const { projectDir, maxContextResets } = this.opts
+    const { projectDir, maxContextResets, maxContextTokens } = this.opts
     const startTime = Date.now()
     let totalInputTokens = 0
     // Record git SHA before the coder starts so we can show exactly what it committed
     let startingSha = await this.getCurrentSha()
 
     for (let resetCount = 0; resetCount <= maxContextResets; resetCount++) {
-      const ctxMgr = new ContextManager()
+      const ctxMgr = new ContextManager({ maxContextTokens, featureId: feature.id })
+      ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
 
       try {
-        let isReset = resetCount > 0
+        let isReset = resetCount > 0 || fixPrompt !== undefined
         let resetPrompt: string | undefined
 
-        if (isReset) {
+        if (resetCount > 0) {
           console.log(chalk.yellow(`\n  ↺ Context reset #${resetCount}/${maxContextResets} — starting fresh session`))
           printAgentBanner('coder', 1, 2, `${feature.id} (context reset #${resetCount})`)
           emit({ type: 'context_reset', featureId: feature.id, resetCount })
@@ -571,10 +850,21 @@ export class Orchestrator {
           )
         }
 
-        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt)
+        const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
+          featureId: feature.id, model: 'claude-sonnet-4-6',
+        })
+        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, coderTrace)
+        this.tracer.endSession(coderTrace)
 
         const stats = ctxMgr.getStats()
         totalInputTokens += stats.totalInput
+        emit({
+          type: 'session_token_usage',
+          featureId: feature.id,
+          inputTokens: stats.totalInput,
+          outputTokens: stats.totalOutput,
+          cacheReadTokens: stats.cacheReadTokens,
+        })
         return {
           success: true,
           durationMs: Date.now() - startTime,
@@ -595,6 +885,13 @@ export class Orchestrator {
 
           const stats = ctxMgr.getStats()
           totalInputTokens += stats.totalInput
+          emit({
+            type: 'session_token_usage',
+            featureId: feature.id,
+            inputTokens: stats.totalInput,
+            outputTokens: stats.totalOutput,
+            cacheReadTokens: stats.cacheReadTokens,
+          })
           // Don't update startingSha — keep the original so git diff spans the whole feature
           ctxMgr.resetForNewSession()
           continue

@@ -7,6 +7,7 @@ const COMPLETION_FILE = 'sprint-completion.json'
 const COMPLETION_PARTIAL_FILE = 'sprint-completion-partial.json'
 const HANDOFF_FILE = 'sprint-context-handoff.json'
 const EVAL_REPORT_FILE = 'eval-report.json'
+const REVIEW_REPORT_FILE = 'review-report.json'
 /** Single-feature file so the coder doesn't have to scan all of features.json */
 const CURRENT_FEATURE_FILE = 'current-feature.json'
 
@@ -88,6 +89,7 @@ export async function cleanSprintArtifacts(dir: string): Promise<void> {
     COMPLETION_PARTIAL_FILE,
     HANDOFF_FILE,
     EVAL_REPORT_FILE,
+    REVIEW_REPORT_FILE,
     CURRENT_FEATURE_FILE,
   ]
   await Promise.all(
