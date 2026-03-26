@@ -56,10 +56,32 @@ const AGENT_LABEL: Record<AgentLabel, string> = {
   reviewer: chalk.yellow('[review]'),
 }
 
+// ---------------------------------------------------------------------------
+// Log verbosity
+// ---------------------------------------------------------------------------
+
+export type LogVerbosity = 'quiet' | 'normal' | 'verbose'
+
+let verbosity: LogVerbosity = 'normal'
+
+export function setLogVerbosity(level: LogVerbosity): void {
+  verbosity = level
+}
+
+export function getLogVerbosity(): LogVerbosity {
+  return verbosity
+}
+
+// ---------------------------------------------------------------------------
+// Per-worker state
+// ---------------------------------------------------------------------------
+
 interface WorkerLogState {
   turnCount: number
   agentLabel: AgentLabel | undefined
   startTime: number
+  /** Last high-level action logged (for dedup in quiet mode) */
+  lastAction: string
 }
 
 /** Per-worker log state. Worker 0 is the default (sequential mode). */
@@ -68,7 +90,7 @@ const workerStates = new Map<number, WorkerLogState>()
 function getWorkerState(workerId: number): WorkerLogState {
   let state = workerStates.get(workerId)
   if (!state) {
-    state = { turnCount: 0, agentLabel: undefined, startTime: Date.now() }
+    state = { turnCount: 0, agentLabel: undefined, startTime: Date.now(), lastAction: '' }
     workerStates.set(workerId, state)
   }
   return state
@@ -92,6 +114,7 @@ export function resetTurnCount(workerId = 0) {
   const state = getWorkerState(workerId)
   state.turnCount = 0
   state.startTime = Date.now()
+  state.lastAction = ''
 }
 
 /** Print a section header banner when an agent phase begins */
@@ -129,9 +152,67 @@ export function printAgentBanner(
   state.agentLabel = agent
 }
 
+// ---------------------------------------------------------------------------
+// Quiet-mode intent classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a tool call into a human-readable intent.
+ * Returns null if the action shouldn't be logged in quiet mode.
+ */
+function classifyIntent(toolName: string, input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null
+  const inp = input as Record<string, unknown>
+
+  if (toolName === 'Write') {
+    const path = String(inp['file_path'] ?? '')
+    const filename = path.split('/').pop() ?? path
+    if (filename === 'sprint-completion.json') return 'Writing sprint completion'
+    if (filename.endsWith('.test.ts') || filename.endsWith('.spec.ts')) return `Writing tests: ${filename}`
+    if (filename.endsWith('.ts') || filename.endsWith('.tsx')) return `Creating ${filename}`
+    if (filename.endsWith('.json')) return `Writing ${filename}`
+    return `Creating ${filename}`
+  }
+
+  if (toolName === 'Edit') {
+    const path = String(inp['file_path'] ?? '')
+    const filename = path.split('/').pop() ?? path
+    return `Editing ${filename}`
+  }
+
+  if (toolName === 'Bash') {
+    const cmd = String(inp['command'] ?? '')
+    if (cmd.startsWith('git add') || cmd.startsWith('git commit')) return 'Committing changes'
+    if (cmd.startsWith('git log')) return null // noise
+    if (cmd.startsWith('git show')) return null
+    if (cmd.startsWith('git status')) return null
+    if (cmd.startsWith('git diff')) return null
+    if (cmd.startsWith('npm test') || cmd.startsWith('npx vitest') || cmd.startsWith('npx jest')) return 'Running tests'
+    if (cmd.startsWith('npm install') || cmd.startsWith('npm run build')) return 'Building project'
+    if (cmd.startsWith('npx tsc')) return 'Type checking'
+    if (cmd.startsWith('bash init.sh')) return 'Starting dev server'
+    if (cmd.startsWith('pwd') || cmd.startsWith('ls') || cmd.startsWith('cat') || cmd.startsWith('head') || cmd.startsWith('tail')) return null
+    if (cmd.startsWith('grep') || cmd.startsWith('find') || cmd.startsWith('sed')) return null
+    if (cmd.startsWith('curl')) return 'Testing endpoint'
+    if (cmd.startsWith('mkdir')) return null
+    return null // most bash commands are noise in quiet mode
+  }
+
+  // Read, Glob, Grep are always noise in quiet mode
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Main log function
+// ---------------------------------------------------------------------------
+
 /**
  * Log progress from an SDK message.
  * Also emits structured events to the event log for the monitor TUI.
+ *
+ * In quiet mode: only logs high-level intents (file creates, edits, test runs, commits).
+ * In normal mode: logs every tool call with summaries (current behavior).
+ * In verbose mode: same as normal (trace files have full detail).
  */
 export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0): void {
   const state = getWorkerState(workerId)
@@ -142,25 +223,41 @@ export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0)
     state.turnCount++
     for (const block of message.message.content) {
       if (block.type === 'tool_use') {
-        const { icon, color } = toolDisplay(block.name)
         const summary = summarizeInput(block.name, block.input)
-        const toolStr = color(`${block.name}`)
-        const summaryStr = summary ? chalk.gray(` ${summary}`) : ''
-        const turnStr = chalk.gray(` t${state.turnCount}`)
-        process.stdout.write(`${prefix}${icon} ${toolStr}${summaryStr}${turnStr}\n`)
 
+        // Always emit structured events (for monitor TUI and traces)
         emit({ type: 'tool_use', agent, tool: block.name, summary, turn: state.turnCount, workerId })
+
+        // Console output depends on verbosity
+        if (verbosity === 'quiet') {
+          const intent = classifyIntent(block.name, block.input)
+          if (intent && intent !== state.lastAction) {
+            state.lastAction = intent
+            process.stdout.write(`${prefix}${chalk.white(intent)}\n`)
+          }
+        } else {
+          const { icon, color } = toolDisplay(block.name)
+          const toolStr = color(`${block.name}`)
+          const summaryStr = summary ? chalk.gray(` ${summary}`) : ''
+          const turnStr = chalk.gray(` t${state.turnCount}`)
+          process.stdout.write(`${prefix}${icon} ${toolStr}${summaryStr}${turnStr}\n`)
+        }
       }
     }
   }
 
   if (message.type === 'tool_progress') {
-    const elapsed = message.elapsed_time_seconds.toFixed(1)
-    const { icon, color } = toolDisplay(message.tool_name)
-    process.stdout.write(
-      `${prefix}${icon} ${color(message.tool_name)} ${chalk.gray(`${elapsed}s…`)}\n`
-    )
+    // Always emit event
     emit({ type: 'tool_progress', agent, tool: message.tool_name, elapsedSeconds: message.elapsed_time_seconds, workerId })
+
+    // Only show in normal/verbose mode
+    if (verbosity !== 'quiet') {
+      const elapsed = message.elapsed_time_seconds.toFixed(1)
+      const { icon, color } = toolDisplay(message.tool_name)
+      process.stdout.write(
+        `${prefix}${icon} ${color(message.tool_name)} ${chalk.gray(`${elapsed}s…`)}\n`
+      )
+    }
   }
 
   if (message.type === 'result') {
@@ -171,6 +268,7 @@ export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0)
       ? chalk.gray(` (${usage.inputTokens}↑ ${usage.outputTokens}↓ tokens)`)
       : ''
 
+    // Always show result (even in quiet mode — it's high-level)
     if (message.is_error) {
       process.stdout.write(`${prefix}${chalk.red('✗ error')}${tokens}\n`)
     } else {
@@ -193,7 +291,12 @@ export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0)
 
   if (message.type === 'system' && message.subtype === 'init') {
     state.turnCount = 0
-    process.stdout.write(`${prefix}${chalk.gray('session started')}\n`)
+
+    // Only show in normal/verbose mode
+    if (verbosity !== 'quiet') {
+      process.stdout.write(`${prefix}${chalk.gray('session started')}\n`)
+    }
+
     emit({ type: 'agent_start', agent, workerId, model: currentModel })
   }
 }

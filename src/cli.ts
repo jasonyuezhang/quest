@@ -200,10 +200,17 @@ program
   .option('--evaluator-model <model>', 'Model to use for the evaluator agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
   .option('--webhook <url>', 'Send POST notifications on feature_done and run_complete events to this URL')
   .option('--notify <channel>', 'Send formatted notifications to a channel (currently: slack). Slack URL read from QUEST_SLACK_WEBHOOK env var')
+  .option('-q, --quiet', 'Show only high-level progress (creating files, running tests, committing). Tool-level detail goes to traces only.', false)
   .option('--ci', 'CI mode: no progress bars, structured JSON to stdout, exit code reflects outcome (0=all pass, 1=any fail, 2=error)', false)
   .option('--fail-fast', 'Stop on first feature failure instead of continuing', false)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string; ci: boolean; failFast: boolean }) => {
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string; quiet: boolean; ci: boolean; failFast: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    // Set log verbosity
+    if (opts.quiet || opts.ci) {
+      const { setLogVerbosity } = await import('./logger.js')
+      setLogVerbosity('quiet')
+    }
 
     // Apply environment variable overrides for CI usage
     if (process.env.QUEST_API_KEY) {
@@ -653,46 +660,153 @@ program
  * quest traces [project-dir]
  *
  * List all recorded LLM sessions with their topics, agents, token usage, and timing.
+ * Reads from SQLite database (.quest/traces.db).
  */
 program
   .command('traces [project-dir]')
-  .description('List all recorded LLM sessions (agent, topic, tokens, duration)')
+  .description('List LLM sessions, query by file, or show cost breakdown')
   .option('-a, --agent <type>', 'Filter by agent type (init, coder, eval, planner)')
   .option('-f, --feature <id>', 'Filter by feature ID')
-  .action(async (projectDirArg: string | undefined, opts: { agent?: string; feature?: string }) => {
+  .option('--file <path>', 'Show all tool calls that touched this file path')
+  .option('--cost-by-agent', 'Show token usage aggregated by agent type')
+  .option('--cost-by-feature', 'Show token usage aggregated by feature')
+  .option('--top-tools', 'Show most frequently used tools')
+  .option('--stats', 'Show database statistics')
+  .action(async (projectDirArg: string | undefined, opts: {
+    agent?: string; feature?: string; file?: string
+    costByAgent?: boolean; costByFeature?: boolean; topTools?: boolean; stats?: boolean
+  }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
-    const { Tracer } = await import('./trace.js')
-    const tracer = new Tracer(projectDir)
-    let sessions = tracer.readIndex()
+    const { TraceDB } = await import('./trace-db.js')
 
-    if (opts.agent) {
-      sessions = sessions.filter(s => s.agent === opts.agent)
-    }
-    if (opts.feature) {
-      sessions = sessions.filter(s => s.featureId === opts.feature)
-    }
-
-    if (sessions.length === 0) {
-      console.log(chalk.gray('No trace sessions found.'))
+    let db: InstanceType<typeof TraceDB>
+    try {
+      db = new TraceDB(projectDir)
+    } catch {
+      console.log(chalk.gray('No trace database found (.quest/traces.db).'))
       console.log(chalk.gray('Traces are recorded automatically during quest run.'))
       return
     }
 
-    console.log(chalk.bold(`\n${sessions.length} LLM sessions:\n`))
-    for (const s of sessions) {
-      const duration = s.endedAt
-        ? `${((new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime()) / 1000).toFixed(0)}s`
-        : 'running'
-      const tokens = `${s.totalInputTokens}↑ ${s.totalOutputTokens}↓`
-      const worker = s.workerId ? chalk.yellow(` W${s.workerId}`) : ''
-      const agentColor = s.agent === 'coder' ? chalk.cyan : s.agent === 'eval' ? chalk.magenta : chalk.blue
-      console.log(
-        `  ${agentColor(`[${s.agent}]`)}${worker} ${s.topic}` +
-        chalk.gray(` — ${s.turns} turns, ${tokens}, ${duration}`),
-      )
-      console.log(chalk.gray(`    ${s.sessionId}`))
+    try {
+      // --stats
+      if (opts.stats) {
+        const s = db.stats()
+        console.log(chalk.bold('\nTrace Database Stats:\n'))
+        console.log(`  Sessions: ${s.sessions}`)
+        console.log(`  Events:   ${s.events}`)
+        console.log(`  DB size:  ${(s.dbSizeBytes / 1024).toFixed(0)} KB`)
+        console.log()
+        return
+      }
+
+      // --file <path>
+      if (opts.file) {
+        const results = db.queryByFile(opts.file)
+        if (results.length === 0) {
+          console.log(chalk.gray(`No tool calls found touching: ${opts.file}`))
+          return
+        }
+        console.log(chalk.bold(`\n${results.length} tool calls touching "${opts.file}":\n`))
+        for (const r of results) {
+          const time = new Date(r.ts).toISOString().split('T')[1]?.split('.')[0] ?? ''
+          const agentColor = r.agent === 'coder' ? chalk.cyan : r.agent === 'eval' ? chalk.magenta : chalk.blue
+          console.log(
+            `  [${time}] ${agentColor(`[${r.agent}]`)} ${r.tool_name ?? 'unknown'}` +
+            chalk.gray(` — ${r.topic}`),
+          )
+        }
+        console.log()
+        return
+      }
+
+      // --cost-by-agent
+      if (opts.costByAgent) {
+        const rows = db.costByAgent()
+        if (rows.length === 0) {
+          console.log(chalk.gray('No completed sessions found.'))
+          return
+        }
+        console.log(chalk.bold('\nToken Usage by Agent:\n'))
+        console.log(chalk.gray('  Agent      Model                Sessions  Input       Output      Turns'))
+        console.log(chalk.gray('  ' + '-'.repeat(75)))
+        for (const r of rows) {
+          const agentColor = r.agent === 'coder' ? chalk.cyan : r.agent === 'eval' ? chalk.magenta : r.agent === 'init' ? chalk.blue : chalk.gray
+          console.log(
+            `  ${agentColor(r.agent.padEnd(10))} ${r.model.padEnd(20)} ${String(r.sessions).padEnd(9)} ` +
+            `${String(r.total_input).padEnd(11)} ${String(r.total_output).padEnd(11)} ${r.total_turns}`,
+          )
+        }
+        console.log()
+        return
+      }
+
+      // --cost-by-feature
+      if (opts.costByFeature) {
+        const rows = db.costByFeature()
+        if (rows.length === 0) {
+          console.log(chalk.gray('No completed sessions found.'))
+          return
+        }
+        console.log(chalk.bold('\nToken Usage by Feature:\n'))
+        console.log(chalk.gray('  Feature                              Sessions  Input       Output'))
+        console.log(chalk.gray('  ' + '-'.repeat(65)))
+        for (const r of rows) {
+          console.log(
+            `  ${r.feature_id.padEnd(38)} ${String(r.sessions).padEnd(9)} ` +
+            `${String(r.total_input).padEnd(11)} ${r.total_output}`,
+          )
+        }
+        console.log()
+        return
+      }
+
+      // --top-tools
+      if (opts.topTools) {
+        const rows = db.topTools()
+        if (rows.length === 0) {
+          console.log(chalk.gray('No tool calls recorded.'))
+          return
+        }
+        console.log(chalk.bold('\nMost Used Tools:\n'))
+        for (const r of rows) {
+          const { icon, color } = { icon: '', color: chalk.white }
+          console.log(
+            `  ${color(r.tool_name.padEnd(20))} ${String(r.count).padEnd(8)} calls across ${r.sessions} sessions`,
+          )
+        }
+        console.log()
+        return
+      }
+
+      // Default: list sessions
+      const sessions = db.listSessions({ agent: opts.agent, featureId: opts.feature })
+
+      if (sessions.length === 0) {
+        console.log(chalk.gray('No trace sessions found.'))
+        console.log(chalk.gray('Traces are recorded automatically during quest run.'))
+        return
+      }
+
+      console.log(chalk.bold(`\n${sessions.length} LLM sessions:\n`))
+      for (const s of sessions) {
+        const duration = s.ended_at
+          ? `${((s.ended_at - s.started_at) / 1000).toFixed(0)}s`
+          : 'running'
+        const tokens = `${s.input_tokens}↑ ${s.output_tokens}↓`
+        const worker = s.worker_id ? chalk.yellow(` W${s.worker_id}`) : ''
+        const agentColor = s.agent === 'coder' ? chalk.cyan : s.agent === 'eval' ? chalk.magenta : chalk.blue
+        const statusIcon = s.status === 'completed' ? chalk.green('✓') : s.status === 'failed' ? chalk.red('✗') : chalk.yellow('…')
+        console.log(
+          `  ${statusIcon} ${agentColor(`[${s.agent}]`)}${worker} ${s.topic}` +
+          chalk.gray(` — ${s.turns} turns, ${tokens}, ${duration}`),
+        )
+        console.log(chalk.gray(`    ${s.session_id}`))
+      }
+      console.log()
+    } finally {
+      db.close()
     }
-    console.log()
   })
 
 /**
@@ -770,27 +884,30 @@ program
       return
     }
 
-    // Fall back to LLM trace lookup
-    const { Tracer, formatSessionTrace } = await import('./trace.js')
-    const tracer = new Tracer(projectDir)
-
-    // Allow partial session ID match
-    const index = tracer.readIndex()
-    const match = index.find(s => s.sessionId === featureIdOrSessionId || s.sessionId.startsWith(featureIdOrSessionId))
-    if (!match) {
+    // Fall back to SQLite trace lookup
+    const { TraceDB, formatSessionFromDB } = await import('./trace-db.js')
+    let db: InstanceType<typeof TraceDB>
+    try {
+      db = new TraceDB(projectDir)
+    } catch {
       console.error(chalk.red(`No transcript or session found for: ${featureIdOrSessionId}`))
-      console.error(chalk.gray('Transcripts are stored in .quest/transcripts/'))
       console.error(chalk.gray('Run quest traces to see available LLM sessions.'))
       process.exit(1)
     }
 
-    const entries = tracer.readSession(match.sessionId)
-    if (entries.length === 0) {
-      console.error(chalk.red(`No trace entries found for session: ${match.sessionId}`))
-      process.exit(1)
-    }
+    try {
+      const session = db.getSession(featureIdOrSessionId)
+      if (!session) {
+        console.error(chalk.red(`No transcript or session found for: ${featureIdOrSessionId}`))
+        console.error(chalk.gray('Run quest traces to see available LLM sessions.'))
+        process.exit(1)
+      }
 
-    console.log('\n' + formatSessionTrace(match, entries) + '\n')
+      const events = db.getSessionEvents(session.session_id)
+      console.log('\n' + formatSessionFromDB(session, events) + '\n')
+    } finally {
+      db.close()
+    }
   })
 
 /**

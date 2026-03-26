@@ -12,7 +12,7 @@ import { TranscriptCapture } from '../transcript.js'
  * - Independent: evaluator never reads the coder's implementation, only tests behavior
  * - Browser-capable: has Playwright MCP for E2E testing live pages
  * - Conservative: false negatives are acceptable, false positives are not
- * - Sole authority: ONLY this agent may set passes:true in features.json
+ * - Verdict authority: evaluator decides pass/fail; orchestrator updates features.json
  */
 const EVALUATOR_SYSTEM_PROMPT = `You are an independent QA evaluator agent. You did NOT write the code you are testing.
 
@@ -61,8 +61,8 @@ Test as a REAL USER would. Don't just check if elements exist — actually inter
 
 When any acceptance criterion FAILS and evidence capture is enabled (see sprint-contract.json):
 
-1. **Screenshots**: Take a Playwright screenshot and save it to `.quest/evidence/<feature-id>/screenshot-<criterion-index>.png`
-   - Create the directory first: `mkdir -p .quest/evidence/<feature-id>/`
+1. **Screenshots**: Take a Playwright screenshot and save it to .quest/evidence/FEATURE_ID/screenshot-CRITERION_INDEX.png
+   - Create the directory first: mkdir -p .quest/evidence/FEATURE_ID/
    - Use Playwright MCP screenshot tool to capture the current page state
 
 2. **Console errors**: Before evaluating browser-based criteria, set up console error capture:
@@ -94,6 +94,7 @@ After evaluating the current feature's criteria, check sprint-contract.json for 
 "skipRegression" is NOT set to true, run a lightweight smoke check for each previous feature:
 
 1. Read features.json to find the acceptance criteria for each previously passing feature.
+   If features.json does not exist in the current directory, skip regression checks entirely.
 2. Run a SINGLE quick smoke check per previously passing feature (not the full evaluation).
    Focus on the most critical criterion only — one test per feature is sufficient.
 3. If a previously passing feature now fails its smoke check, record it as a regression.
@@ -159,24 +160,13 @@ The "consoleErrors" field is OPTIONAL — only include it if console errors were
 The "networkErrors" field is OPTIONAL — only include it if network failures were captured.
 Omit these fields (don't include empty arrays) if no errors were found.
 
-## If Verdict is "pass"
+## After Writing eval-report.json
 
-ONLY after writing eval-report.json with all criteria passing, update features.json:
-1. Read features.json
-2. Find the feature with matching id
-3. Set "passes": true
-4. Set "implementedAt": "<ISO timestamp>"
-5. Write features.json back
+Your ONLY output file is eval-report.json. Do NOT modify features.json — the orchestrator
+handles marking features as passing based on your verdict. Do NOT modify any source code.
+Do NOT modify claude-progress.txt.
 
-CRITICAL: This is the ONLY write operation you may perform other than eval-report.json.
-Do NOT modify any source code. Do NOT modify claude-progress.txt.
-Do NOT set passes:true if any criterion has result:"fail".
-
-## If Verdict is "fail"
-
-Write eval-report.json with verdict:"fail" and detailed failure evidence for each failing criterion.
-Do NOT update features.json.
-The orchestrator will decide whether to retry or skip.`
+Stop after writing eval-report.json. The orchestrator reads your verdict and acts on it.`
 
 export async function runEvaluatorAgent(
   projectDir: string,
@@ -198,7 +188,7 @@ export async function runEvaluatorAgent(
 
 Follow your startup protocol (pwd, read sprint-contract.json, read sprint-completion.json, start dev server), then evaluate every acceptance criterion. Write eval-report.json with your verdict and evidence.
 
-If verdict is "pass", also update features.json to set passes:true for this feature.`
+Do NOT modify features.json — the orchestrator handles that.`
 
   let sessionId = 'unknown'
   let success = false

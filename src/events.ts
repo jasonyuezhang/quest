@@ -27,6 +27,7 @@ export type QuestEvent =
   | { ts: string; type: 'dag_built'; levels: number; criticalPath: string[]; maxParallelism: number; totalFeatures: number }
   | { ts: string; type: 'batch_plan'; ready: number; dispatching: number; inFlight: number; reason: string }
   | { ts: string; type: 'feature_unblocked'; featureId: string; unblockedBy: string }
+  | { ts: string; type: 'conflict_detected'; sourceFeatureId: string; targetFeatureId: string; conflictingFiles?: string[] }
   | { ts: string; type: 'run_complete'; passing: number; total: number; durationMs: number; totalCostUsd?: number; costByAgent?: Array<{ agent: string; estimatedUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number }> }
   | { ts: string; type: 'init_failed'; attempt: number; exitCode: number | null; stderr: string }
   | { ts: string; type: 'shutdown'; featureId: string; featureName: string; reason: string }

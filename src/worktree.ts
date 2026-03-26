@@ -152,22 +152,17 @@ export async function getWorktreeSha(worktreeDir: string): Promise<string | unde
 }
 
 /**
- * Copy files needed by agents from the main worktree into a worker worktree.
- * Sprint artifacts are written fresh per-feature, but these files are needed at startup.
+ * Copy only init.sh to the worker worktree.
+ *
+ * State files (features.json, claude-progress.txt) are NO LONGER copied —
+ * they live in the centralized QuestStore (.quest/store/) and workers read
+ * them via absolute path. This prevents state desync between main and worktrees.
  */
 export async function syncFilesToWorktree(mainDir: string, worktreeDir: string): Promise<void> {
-  const filesToSync = [
-    'features.json',
-    'claude-progress.txt',
-    'init.sh',
-  ]
-
-  for (const file of filesToSync) {
-    const src = join(mainDir, file)
-    const dst = join(worktreeDir, file)
-    if (existsSync(src)) {
-      cpSync(src, dst, { force: true })
-    }
+  const src = join(mainDir, 'init.sh')
+  const dst = join(worktreeDir, 'init.sh')
+  if (existsSync(src)) {
+    cpSync(src, dst, { force: true })
   }
 }
 

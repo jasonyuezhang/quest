@@ -303,7 +303,7 @@ function CostPanel({ state }: { state: MonitorState }) {
         </Box>
       ))}
       {costSummary.byAgent.length === 0 ? (
-        <Text color="gray" paddingLeft={2}>No agent runs recorded yet.</Text>
+        <Text color="gray">  No agent runs recorded yet.</Text>
       ) : null}
     </Box>
   )

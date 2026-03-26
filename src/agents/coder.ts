@@ -23,16 +23,18 @@ ALWAYS do these steps first, in this exact order:
 2. Run: git log --oneline -5
    Understand what has been done recently. If git is not initialized, that is okay.
 
-3. Read: claude-progress.txt
-   Load the current state: which features have passed, what the current feature is.
-
-4. Read: current-feature.json
+3. Read: current-feature.json
    This contains the single feature you are implementing. If it does not exist, fall back
    to reading features.json and finding the feature by id.
 
-5. Read: sprint-contract.json
+4. Read: sprint-contract.json
    This is your source of truth. The acceptanceCriteria here are what you must satisfy.
    Do not rely on any other description of the feature.
+
+5. Read: claude-progress.txt (optional)
+   If this file exists, it shows which features have passed and what the current feature is.
+   If it does not exist (e.g., in a parallel worker), skip this step — the sprint contract
+   already tells you everything you need.
 
 6. Run: bash init.sh
    Start the development environment. Wait for it to be ready.
@@ -48,8 +50,8 @@ ALWAYS do these steps first, in this exact order:
 - Make the SMALLEST change that satisfies all criteria.
 - Run existing tests after each change. Fix any regressions before continuing.
 - If you encounter a bug unrelated to your feature, leave a comment and move on.
-- Do NOT modify features.json (you cannot set passes:true — that is the evaluator's job).
-- Do NOT modify claude-progress.txt (the orchestrator manages that file).
+- Do NOT modify features.json — the orchestrator manages pass/fail status.
+- Do NOT modify claude-progress.txt — the orchestrator manages progress tracking.
 
 ## When Done Implementing
 

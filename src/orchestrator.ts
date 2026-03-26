@@ -12,6 +12,7 @@ import { runEvaluatorAgent } from './agents/evaluator.js'
 import { runReviewerAgent, readReviewReport } from './agents/reviewer.js'
 import { ContextManager } from './context/manager.js'
 import { readFeaturesFile, writeFeaturesFile, getNextFeature, countPassing } from './state/features.js'
+import { QuestStore } from './store.js'
 import { readProgress, writeProgress, createInitialProgress } from './state/progress.js'
 import {
   buildSprintContract,
@@ -102,6 +103,7 @@ export class Orchestrator {
   private opts: Required<Omit<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>> & Pick<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>
   private tracer: Tracer
   private agentGit: AgentGit
+  readonly store: QuestStore
   readonly pluginManager: PluginManager
 
   /** Set to true when SIGINT/SIGTERM is received — stops dispatching new work */
@@ -130,6 +132,7 @@ export class Orchestrator {
       healthTimeout: 30,
       skipRegression: false,
       noTranscripts: false,
+      noEvidence: false,
       tdd: false,
       ciMode: false,
       failFast: false,
@@ -140,6 +143,7 @@ export class Orchestrator {
       reviewerModel: resolvedReviewerModel,
     }
     this.tracer = new Tracer(opts.projectDir)
+    this.store = new QuestStore(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
     this.pluginManager = new PluginManager(opts.projectDir)
   }
@@ -397,6 +401,9 @@ export class Orchestrator {
     if (!this.opts.noTranscripts) {
       TranscriptCapture.cleanup(projectDir)
     }
+
+    // Initialize centralized store — all shared state reads/writes go through here
+    this.store.init()
 
     initEventLog(projectDir)
     await this.runInitSh()
@@ -912,6 +919,9 @@ export class Orchestrator {
       }
 
       if (report.verdict === 'pass') {
+        // Mark passing in centralized store (not worktree-local features.json)
+        this.store.markFeaturePassing(feature.id, evalResult.sessionId)
+
         // Commit in the worktree branch
         try {
           await execAsync(
@@ -1218,7 +1228,10 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
           metadata: { featureId: feature.id, phase: 'eval-pass', verdict: 'pass' },
         })
 
-        // Evaluator already set passes:true in features.json — commit the feature
+        // Mark passing in centralized store (evaluator no longer writes features.json)
+        this.store.markFeaturePassing(feature.id, evalResult.sessionId)
+
+        // Commit the feature
         await this.commitFeature(feature, evalResult.sessionId)
         await this.agentGit.endSession(agSession.id)
 
