@@ -1,13 +1,11 @@
 {
-  "featureId": "cli-init-command-basic",
-  "featureName": "quest init — Basic Project Initialization",
-  "description": "The `quest init` command accepts a project directory and creates the three scaffold files: init.sh, features.json, and claude-progress.txt",
+  "featureId": "project-setup-1",
+  "featureName": "Project Setup",
+  "description": "Initialize the project structure and development environment",
   "acceptanceCriteria": [
-    "Running `quest init <dir>` creates init.sh in the target directory",
-    "Running `quest init <dir>` creates features.json with at least 10 features",
-    "Running `quest init <dir>` creates claude-progress.txt with valid JSON",
-    "Command exits with code 0 on success",
-    "Command prints a confirmation message to stdout when complete"
+    "Project directory structure is created",
+    "Dependencies are installed",
+    "Development server starts without errors"
   ],
-  "startedAt": "2026-03-26T08:16:57.589Z"
+  "startedAt": "2026-03-26T09:23:47.032Z"
 }

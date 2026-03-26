@@ -1,10 +1,10 @@
 {
-  "projectName": "quest-cli",
-  "totalFeatures": 204,
+  "projectName": "quest",
+  "totalFeatures": 15,
   "passedFeatures": 0,
-  "currentFeatureId": "cli-init-command-basic",
+  "currentFeatureId": "project-setup-1",
   "lastCommitSha": null,
   "lastSessionId": null,
-  "lastUpdated": "2026-03-26T06:38:21.753Z",
+  "lastUpdated": "2026-03-26T09:23:47.032Z",
   "contextResets": 0
 }
