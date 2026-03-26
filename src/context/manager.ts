@@ -142,8 +142,11 @@ export class ContextManager {
     const remainingCriteria = feature.acceptanceCriteria.filter(
       c => !completedSteps.some(s => c.toLowerCase().includes(s.toLowerCase().slice(0, 20))),
     )
+    const completedCriteria = feature.acceptanceCriteria.filter(
+      c => !remainingCriteria.includes(c),
+    )
 
-    // Get files changed since the feature started (both committed and uncommitted)
+    // Get files modified since the feature started (git diff --name-only)
     const [modifiedUncommitted, modifiedCommitted] = await Promise.all([
       gitExec('git diff --name-only HEAD', projectDir),
       startingSha
@@ -157,10 +160,8 @@ export class ContextManager {
       ].filter(Boolean)),
     ]
 
-    // Capture commits made during this feature's work
-    const recentCommits = startingSha
-      ? await gitExec(`git log --oneline ${startingSha}..HEAD`, projectDir)
-      : await gitExec('git log --oneline -5', projectDir)
+    // Capture the last 5 git commits for the fresh agent to understand recent work
+    const recentCommits = await gitExec('git log --oneline -5', projectDir)
 
     // Get a diff stat to show what changed
     const diffStat = startingSha
@@ -171,6 +172,7 @@ export class ContextManager {
       featureId: feature.id,
       featureName: feature.name,
       completedSteps,
+      completedCriteria,
       remainingCriteria,
       modifiedFiles,
       recentCommits,

@@ -935,7 +935,6 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         if (resetCount > 0) {
           console.log(chalk.yellow(`\n  ↺ Context reset #${resetCount}/${maxContextResets} — starting fresh session`))
           printAgentBanner('coder', 1, 2, `${feature.id} (context reset #${resetCount})`)
-          emit({ type: 'context_reset', featureId: feature.id, resetCount })
           resetPrompt = await ctxMgr.buildHandoffPrompt(
             projectDir,
             feature,
@@ -943,6 +942,12 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
             `Reset ${resetCount}: continuing from previous session`,
             startingSha,
           )
+          // Read handoff to get completed/remaining counts for the event
+          const { readContextHandoff } = await import('./sprint/contracts.js')
+          const handoff = await readContextHandoff(projectDir)
+          const completedCount = handoff?.completedCriteria.length ?? 0
+          const remainingCount = handoff?.remainingCriteria.length ?? feature.acceptanceCriteria.length
+          emit({ type: 'context_reset', featureId: feature.id, resetCount, completedCount, remainingCount })
         }
 
         const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {

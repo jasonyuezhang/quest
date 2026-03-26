@@ -19,7 +19,7 @@ export type QuestEvent =
   | { ts: string; type: 'tool_use'; agent: AgentLabel; tool: string; summary: string; turn: number; workerId?: number }
   | { ts: string; type: 'tool_progress'; agent: AgentLabel; tool: string; elapsedSeconds: number; workerId?: number }
   | { ts: string; type: 'agent_done'; agent: AgentLabel; featureId?: string; turns: number; durationMs: number; success: boolean; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; workerId?: number }
-  | { ts: string; type: 'context_reset'; featureId: string; resetCount: number; workerId?: number }
+  | { ts: string; type: 'context_reset'; featureId: string; resetCount: number; completedCount: number; remainingCount: number; workerId?: number }
   | { ts: string; type: 'context_warning'; featureId?: string; usagePct: number; contextTokens: number; workerId?: number }
   | { ts: string; type: 'session_token_usage'; featureId?: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; workerId?: number }
   | { ts: string; type: 'eval_verdict'; featureId: string; verdict: 'pass' | 'fail'; criteriaResults: Array<{ criterion: string; result: 'pass' | 'fail'; evidence: string }>; workerId?: number }

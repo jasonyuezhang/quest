@@ -71,11 +71,13 @@ export interface ContextHandoff {
   featureId: string
   featureName: string
   completedSteps: string[]
+  /** Acceptance criteria that are already done — fresh session must verify these still pass */
+  completedCriteria: string[]
   remainingCriteria: string[]
   modifiedFiles: string[]
-  /** Recent git commits made during this feature's work (git log output) */
+  /** Last 5 git commits made during this feature's work (git log --oneline -5) */
   recentCommits: string
-  /** Diff stat of changes since the feature started (git diff --stat) */
+  /** Diff stat of changes since the feature started (git diff --name-only) */
   diffStat: string
   partialNotes: string
   handoffAt: string

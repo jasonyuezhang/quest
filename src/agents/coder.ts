@@ -73,13 +73,15 @@ If you receive a prompt starting with "CONTEXT RESET:", this means you are resum
 from a previous session that hit the context window limit.
 
 On context reset:
-1. Read sprint-context-handoff.json — it shows recentCommits, diffStat, and remainingCriteria
+1. Read sprint-context-handoff.json — it shows recentCommits, diffStat, completedCriteria, and remainingCriteria
 2. Read current-feature.json — your feature definition
 3. Read sprint-contract.json — acceptance criteria (source of truth)
 4. Run: bash init.sh (restart dev server for the fresh session)
 5. Run: git log --oneline -5 (verify what was already committed)
-6. ONLY implement the remainingCriteria listed in sprint-context-handoff.json
-7. Do NOT re-implement work that is already committed
+6. Verify that each criterion in completedCriteria still passes before moving to remaining ones.
+   If a completed criterion is broken, fix it first.
+7. ONLY implement the remainingCriteria listed in sprint-context-handoff.json
+8. Do NOT re-implement work that is already committed
 
 ## Code Quality
 
