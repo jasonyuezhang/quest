@@ -698,4 +698,117 @@ program
     }
   })
 
+/**
+ * quest report [project-dir]
+ *
+ * Generate a human-readable report from the latest run's quest-events.jsonl.
+ * Supports markdown (default), JSON, and HTML formats.
+ * Output is written to .quest/reports/<timestamp>.<ext>.
+ */
+program
+  .command('report [project-dir]')
+  .description('Generate a run summary report from quest-events.jsonl (markdown, json, or html)')
+  .option('--format <fmt>', 'Output format: markdown (default), json, or html', 'markdown')
+  .action(async (projectDirArg: string | undefined, opts: { format: string }) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    if (!existsSync(projectDir)) {
+      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
+      process.exit(1)
+    }
+
+    const fmt = opts.format.toLowerCase()
+    if (fmt !== 'markdown' && fmt !== 'json' && fmt !== 'html') {
+      console.error(chalk.red(`Unsupported format: ${opts.format}`))
+      console.error(chalk.gray('Supported formats: markdown, json, html'))
+      process.exit(1)
+    }
+
+    const { generateReport } = await import('./report.js')
+
+    try {
+      const reportPath = generateReport(projectDir, fmt as 'markdown' | 'json' | 'html')
+      console.log(chalk.green(`✓ Report written to: ${reportPath}`))
+    } catch (err) {
+      console.error(chalk.red('Report generation failed:'), err instanceof Error ? err.message : err)
+      process.exit(1)
+    }
+  })
+
+/**
+ * quest config <subcommand> [project-dir]
+ *
+ * Manage the .quest/config.json project configuration file.
+ *
+ *   quest config set <key> <value>    Update a config key
+ *   quest config show                 Show merged configuration
+ */
+const configCmd = program
+  .command('config')
+  .description('Manage .quest/config.json project configuration')
+
+configCmd
+  .command('set <key> <value> [project-dir]')
+  .description('Set a config key in .quest/config.json (e.g. quest config set maxConcurrency 8)')
+  .action(async (key: string, value: string, projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { setConfigKey, SETTABLE_KEYS } = await import('./config.js')
+    try {
+      await setConfigKey(projectDir, key, value)
+      console.log(chalk.green(`✓ Set ${key} = ${value} in .quest/config.json`))
+    } catch (err) {
+      console.error(chalk.red('Config set failed:'), err instanceof Error ? err.message : err)
+      console.error(chalk.gray(`Valid keys: ${SETTABLE_KEYS.join(', ')}`))
+      process.exit(1)
+    }
+  })
+
+configCmd
+  .command('show [project-dir]')
+  .description('Display the merged configuration (defaults + .quest/config.json + CLI overrides)')
+  .action(async (projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { mergeConfig, readConfigFile, getConfigPath, CONFIG_DEFAULTS } = await import('./config.js')
+    const merged = mergeConfig(projectDir)
+    const fileConfig = readConfigFile(projectDir)
+    const configPath = getConfigPath(projectDir)
+    const hasFile = existsSync(configPath)
+
+    console.log(chalk.bold('\nMerged Configuration\n'))
+    if (hasFile) {
+      console.log(chalk.gray(`  Source: ${configPath}\n`))
+    } else {
+      console.log(chalk.gray('  No .quest/config.json found — showing defaults\n'))
+    }
+
+    const fields: Array<[string, unknown, unknown]> = [
+      ['maxConcurrency', merged.maxConcurrency, CONFIG_DEFAULTS.maxConcurrency],
+      ['retryLimit', merged.retryLimit, CONFIG_DEFAULTS.retryLimit],
+      ['maxResets', merged.maxResets, CONFIG_DEFAULTS.maxResets],
+      ['maxContext', merged.maxContext, CONFIG_DEFAULTS.maxContext],
+      ['browserTestUrl', merged.browserTestUrl, CONFIG_DEFAULTS.browserTestUrl],
+      ['webhookUrl', merged.webhookUrl, CONFIG_DEFAULTS.webhookUrl],
+      ['tddMode', merged.tddMode, CONFIG_DEFAULTS.tddMode],
+      ['reviewMode', merged.reviewMode, CONFIG_DEFAULTS.reviewMode],
+    ]
+
+    for (const [key, val, _defaultVal] of fields) {
+      const fromFile = fileConfig[key as keyof typeof fileConfig] !== undefined
+      const sourceTag = fromFile ? chalk.green(' (from config file)') : chalk.gray(' (default)')
+      const display = val === undefined ? chalk.gray('(not set)') : String(val)
+      console.log(`  ${chalk.cyan(key.padEnd(18))} ${display}${sourceTag}`)
+    }
+
+    // Show model config
+    console.log(`\n  ${chalk.cyan('models')}`)
+    const modelKeys = ['coder', 'evaluator', 'reviewer', 'planner'] as const
+    for (const mk of modelKeys) {
+      const val = merged.models?.[mk]
+      const fromFile = fileConfig.models?.[mk] !== undefined
+      const sourceTag = fromFile ? chalk.green(' (from config file)') : chalk.gray(' (default)')
+      console.log(`    ${chalk.cyan(mk.padEnd(14))} ${val ?? chalk.gray('(not set)')}${sourceTag}`)
+    }
+    console.log()
+  })
+
 program.parse()
