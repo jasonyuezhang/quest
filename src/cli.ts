@@ -911,6 +911,22 @@ program
   })
 
 /**
+ * quest dashboard [project-dir]
+ *
+ * Launch a web-based Trello-like feature management board.
+ * Features are stored in SQLite (.quest/features.db) for data consistency.
+ */
+program
+  .command('dashboard [project-dir]')
+  .description('Launch web-based feature board (Trello-like UI backed by SQLite)')
+  .option('-p, --port <port>', 'Port to listen on', (v) => parseInt(v, 10), 3700)
+  .action(async (projectDirArg: string | undefined, opts: { port: number }) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { startDashboard } = await import('./dashboard/server.js')
+    startDashboard(projectDir, opts.port)
+  })
+
+/**
  * quest clean [project-dir]
  *
  * Remove all session transcripts from .quest/transcripts/.

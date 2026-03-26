@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quest — Feature Board</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e; --text-dim: #484f58;
+    --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+    --yellow: #d29922; --purple: #bc8cff;
+    --high: #f85149; --medium: #d29922; --low: #8b949e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Header */
+  .header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header h1 span { color: var(--accent); }
+  .stats { display: flex; gap: 16px; font-size: 13px; color: var(--text-muted); }
+  .stats .num { font-weight: 600; color: var(--text); }
+  .progress-bar { width: 120px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--green); transition: width 0.3s; }
+
+  /* Toolbar */
+  .toolbar { padding: 12px 24px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--border); }
+  .toolbar button, .toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .toolbar button:hover { border-color: var(--accent); }
+  .toolbar .active { background: var(--accent); color: #000; border-color: var(--accent); }
+  .search { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; flex: 1; max-width: 300px; font-size: 13px; }
+  .search:focus { outline: none; border-color: var(--accent); }
+
+  /* Board */
+  .board { display: flex; gap: 16px; padding: 16px 24px; overflow-x: auto; min-height: calc(100vh - 120px); align-items: flex-start; }
+  .column { min-width: 320px; max-width: 320px; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
+  .column-header { padding: 12px 16px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--surface); border-radius: 8px 8px 0 0; z-index: 1; }
+  .column-count { background: var(--border); padding: 2px 8px; border-radius: 10px; font-size: 12px; color: var(--text-muted); }
+  .column-body { padding: 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+
+  /* Cards */
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer; transition: border-color 0.15s; }
+  .card:hover { border-color: var(--accent); }
+  .card.dragging { opacity: 0.5; }
+  .card-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+  .card-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--border); color: var(--text-muted); }
+  .tag.high { background: rgba(248,81,73,0.15); color: var(--high); }
+  .tag.medium { background: rgba(210,153,34,0.15); color: var(--medium); }
+  .tag.low { background: rgba(139,148,158,0.15); color: var(--low); }
+  .tag.cat { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .criteria-count { font-size: 11px; color: var(--text-dim); }
+
+  /* List view */
+  .list { padding: 16px 24px; }
+  .list-row { display: grid; grid-template-columns: 32px 1fr 100px 80px 80px 60px; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); align-items: center; font-size: 13px; }
+  .list-row:hover { background: var(--surface); }
+  .list-header { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-dot.pass { background: var(--green); }
+  .status-dot.pending { background: var(--border); }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 600px; max-height: 80vh; overflow-y: auto; padding: 24px; }
+  .modal h2 { font-size: 16px; margin-bottom: 16px; }
+  .modal label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; margin-top: 12px; }
+  .modal input, .modal textarea, .modal select { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
+  .modal textarea { min-height: 80px; resize: vertical; }
+  .modal input:focus, .modal textarea:focus, .modal select:focus { outline: none; border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+  .modal-actions button { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font-size: 13px; }
+  .modal-actions .primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .modal-actions .danger { background: transparent; color: var(--red); border-color: var(--red); }
+  .deps-list { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .dep-tag { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: rgba(188,140,255,0.15); color: var(--purple); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>Quest</span> Feature Board</h1>
+  <div class="stats">
+    <div><span class="num" id="stat-passing">0</span> passing</div>
+    <div><span class="num" id="stat-pending">0</span> pending</div>
+    <div><span class="num" id="stat-total">0</span> total</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <span id="progress-pct">0%</span>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <button id="tab-features" class="active" onclick="setTab('features')">Features</button>
+  <button id="tab-traces" onclick="setTab('traces')">Traces</button>
+  <span id="features-toolbar" style="display:contents">
+    <button id="view-board" class="active" onclick="setView('board')">Board</button>
+    <button id="view-list" onclick="setView('list')">List</button>
+    <input class="search" id="search" placeholder="Search features..." oninput="render()">
+    <select id="filter-priority" onchange="render()">
+      <option value="">All priorities</option>
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+    <select id="filter-category" onchange="render()"></select>
+    <button onclick="openAddModal()">+ Add Feature</button>
+  </span>
+  <span id="traces-toolbar" style="display:none">
+    <select id="trace-agent-filter" onchange="loadTraces()">
+      <option value="">All agents</option>
+      <option value="coder">Coder</option>
+      <option value="eval">Evaluator</option>
+      <option value="init">Initializer</option>
+    </select>
+    <input class="search" id="trace-search" placeholder="Search by file path..." onkeydown="if(event.key==='Enter')searchTraces()">
+    <button onclick="searchTraces()">Search</button>
+    <button onclick="loadCostByAgent()">Cost by Agent</button>
+    <button onclick="loadTopTools()">Top Tools</button>
+  </span>
+</div>
+
+<div id="features-panel">
+  <div id="board-view" class="board"></div>
+  <div id="list-view" class="list" style="display:none"></div>
+</div>
+<div id="traces-panel" style="display:none">
+  <div class="list" id="traces-content"></div>
+  <!-- Session detail panel -->
+  <div class="modal-overlay" id="trace-modal">
+    <div class="modal" style="width:800px;max-height:90vh">
+      <h2 id="trace-modal-title">Session Detail</h2>
+      <div id="trace-meta" style="font-size:13px;color:var(--text-muted);margin-bottom:16px"></div>
+      <div id="trace-events" style="font-family:'SF Mono',Menlo,monospace;font-size:12px;line-height:1.6;max-height:60vh;overflow-y:auto"></div>
+      <div class="modal-actions"><button onclick="closeTraceModal()">Close</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit/Add Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">Edit Feature</h2>
+    <input type="hidden" id="modal-mode">
+    <label>ID</label>
+    <input id="f-id" placeholder="kebab-case-id">
+    <label>Name</label>
+    <input id="f-name" placeholder="Human-readable name">
+    <label>Description</label>
+    <textarea id="f-desc" placeholder="What this feature does"></textarea>
+    <label>Category</label>
+    <input id="f-cat" placeholder="e.g., api, auth, ui, testing">
+    <label>Priority</label>
+    <select id="f-pri">
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+    <label>Acceptance Criteria (one per line)</label>
+    <textarea id="f-criteria" rows="5" placeholder="Each line is one criterion"></textarea>
+    <label>Depends On (comma-separated feature IDs)</label>
+    <input id="f-deps" placeholder="e.g., feature-a, feature-b">
+    <div class="modal-actions">
+      <button class="danger" id="btn-delete" onclick="deleteFeature()" style="display:none">Delete</button>
+      <div style="flex:1"></div>
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveFeature()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let features = []
+let view = 'board'
+let editingId = null
+
+async function load() {
+  const [featRes, statsRes] = await Promise.all([
+    fetch('/api/features'), fetch('/api/stats')
+  ])
+  features = await featRes.json()
+  const stats = await statsRes.json()
+
+  document.getElementById('stat-passing').textContent = stats.passing
+  document.getElementById('stat-pending').textContent = stats.pending
+  document.getElementById('stat-total').textContent = stats.total
+  const pct = stats.total > 0 ? Math.round((stats.passing / stats.total) * 100) : 0
+  document.getElementById('progress-fill').style.width = pct + '%'
+  document.getElementById('progress-pct').textContent = pct + '%'
+
+  // Populate category filter
+  const catSelect = document.getElementById('filter-category')
+  const currentCat = catSelect.value
+  catSelect.innerHTML = '<option value="">All categories</option>'
+  for (const cat of stats.categories) {
+    catSelect.innerHTML += `<option value="${cat}" ${cat === currentCat ? 'selected' : ''}>${cat}</option>`
+  }
+
+  render()
+}
+
+function getFiltered() {
+  const search = document.getElementById('search').value.toLowerCase()
+  const priority = document.getElementById('filter-priority').value
+  const category = document.getElementById('filter-category').value
+
+  return features.filter(f => {
+    if (search && !f.id.toLowerCase().includes(search) && !f.name.toLowerCase().includes(search) && !f.description.toLowerCase().includes(search)) return false
+    if (priority && f.priority !== priority) return false
+    if (category && f.category !== category) return false
+    return true
+  })
+}
+
+function render() {
+  if (view === 'board') renderBoard()
+  else renderList()
+}
+
+function renderBoard() {
+  const filtered = getFiltered()
+  const columns = {
+    'High Priority': filtered.filter(f => f.priority === 'high' && !f.passes),
+    'Medium Priority': filtered.filter(f => f.priority === 'medium' && !f.passes),
+    'Low Priority': filtered.filter(f => f.priority === 'low' && !f.passes),
+    'Passed': filtered.filter(f => f.passes),
+  }
+
+  const board = document.getElementById('board-view')
+  board.innerHTML = ''
+
+  for (const [title, items] of Object.entries(columns)) {
+    const col = document.createElement('div')
+    col.className = 'column'
+    col.innerHTML = `
+      <div class="column-header">
+        ${title}
+        <span class="column-count">${items.length}</span>
+      </div>
+      <div class="column-body">
+        ${items.map(f => cardHTML(f)).join('')}
+      </div>
+    `
+    board.appendChild(col)
+  }
+}
+
+function cardHTML(f) {
+  const deps = f.dependsOn?.length ? `<div class="deps-list">${f.dependsOn.map(d => `<span class="dep-tag">${d}</span>`).join('')}</div>` : ''
+  return `
+    <div class="card" onclick="openEditModal('${f.id}')">
+      <div class="card-title">${esc(f.name)}</div>
+      <div class="card-desc">${esc(f.description)}</div>
+      <div class="card-meta">
+        <span class="tag ${f.priority}">${f.priority}</span>
+        <span class="tag cat">${f.category}</span>
+        <span class="criteria-count">${f.acceptanceCriteria.length} criteria</span>
+      </div>
+      ${deps}
+    </div>
+  `
+}
+
+function renderList() {
+  const filtered = getFiltered()
+  const list = document.getElementById('list-view')
+  list.innerHTML = `
+    <div class="list-row list-header">
+      <div></div><div>Feature</div><div>Category</div><div>Priority</div><div>Status</div><div>Criteria</div>
+    </div>
+    ${filtered.map(f => `
+      <div class="list-row" onclick="openEditModal('${f.id}')" style="cursor:pointer">
+        <div><div class="status-dot ${f.passes ? 'pass' : 'pending'}"></div></div>
+        <div>
+          <div style="font-weight:500">${esc(f.name)}</div>
+          <div style="font-size:11px;color:var(--text-dim)">${f.id}</div>
+        </div>
+        <div><span class="tag cat">${f.category}</span></div>
+        <div><span class="tag ${f.priority}">${f.priority}</span></div>
+        <div>${f.passes ? '<span style="color:var(--green)">Passed</span>' : '<span style="color:var(--text-muted)">Pending</span>'}</div>
+        <div>${f.acceptanceCriteria.length}</div>
+      </div>
+    `).join('')}
+  `
+}
+
+function setView(v) {
+  view = v
+  document.getElementById('board-view').style.display = v === 'board' ? 'flex' : 'none'
+  document.getElementById('list-view').style.display = v === 'list' ? 'block' : 'none'
+  document.getElementById('view-board').className = v === 'board' ? 'active' : ''
+  document.getElementById('view-list').className = v === 'list' ? 'active' : ''
+  render()
+}
+
+function openEditModal(id) {
+  const f = features.find(x => x.id === id)
+  if (!f) return
+  editingId = id
+  document.getElementById('modal-title').textContent = 'Edit Feature'
+  document.getElementById('modal-mode').value = 'edit'
+  document.getElementById('f-id').value = f.id
+  document.getElementById('f-id').disabled = true
+  document.getElementById('f-name').value = f.name
+  document.getElementById('f-desc').value = f.description
+  document.getElementById('f-cat').value = f.category
+  document.getElementById('f-pri').value = f.priority
+  document.getElementById('f-criteria').value = f.acceptanceCriteria.join('\n')
+  document.getElementById('f-deps').value = (f.dependsOn || []).join(', ')
+  document.getElementById('btn-delete').style.display = 'inline-block'
+  document.getElementById('modal').classList.add('open')
+}
+
+function openAddModal() {
+  editingId = null
+  document.getElementById('modal-title').textContent = 'Add Feature'
+  document.getElementById('modal-mode').value = 'add'
+  document.getElementById('f-id').value = ''
+  document.getElementById('f-id').disabled = false
+  document.getElementById('f-name').value = ''
+  document.getElementById('f-desc').value = ''
+  document.getElementById('f-cat').value = ''
+  document.getElementById('f-pri').value = 'medium'
+  document.getElementById('f-criteria').value = ''
+  document.getElementById('f-deps').value = ''
+  document.getElementById('btn-delete').style.display = 'none'
+  document.getElementById('modal').classList.add('open')
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open')
+  editingId = null
+}
+
+async function saveFeature() {
+  const mode = document.getElementById('modal-mode').value
+  const data = {
+    id: document.getElementById('f-id').value.trim(),
+    name: document.getElementById('f-name').value.trim(),
+    description: document.getElementById('f-desc').value.trim(),
+    category: document.getElementById('f-cat').value.trim() || 'general',
+    priority: document.getElementById('f-pri').value,
+    acceptanceCriteria: document.getElementById('f-criteria').value.split('\n').map(s => s.trim()).filter(Boolean),
+    dependsOn: document.getElementById('f-deps').value.split(',').map(s => s.trim()).filter(Boolean),
+  }
+
+  if (!data.id || !data.name) { alert('ID and Name are required'); return }
+
+  if (mode === 'add') {
+    await fetch('/api/features', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+  } else {
+    await fetch(`/api/features/${editingId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+  }
+
+  closeModal()
+  await load()
+}
+
+async function deleteFeature() {
+  if (!editingId) return
+  if (!confirm(`Delete feature "${editingId}"?`)) return
+  await fetch(`/api/features/${editingId}`, { method: 'DELETE' })
+  closeModal()
+  await load()
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML }
+
+// ── Tab switching ─────────────────────────────────────────────────────
+
+let activeTab = 'features'
+
+function setTab(tab) {
+  activeTab = tab
+  document.getElementById('tab-features').className = tab === 'features' ? 'active' : ''
+  document.getElementById('tab-traces').className = tab === 'traces' ? 'active' : ''
+  document.getElementById('features-toolbar').style.display = tab === 'features' ? 'contents' : 'none'
+  document.getElementById('traces-toolbar').style.display = tab === 'traces' ? 'contents' : 'none'
+  document.getElementById('features-panel').style.display = tab === 'features' ? 'block' : 'none'
+  document.getElementById('traces-panel').style.display = tab === 'traces' ? 'block' : 'none'
+  if (tab === 'traces') loadTraces()
+}
+
+// Check hash on load
+if (location.hash === '#traces') setTimeout(() => setTab('traces'), 100)
+
+// ── Traces ────────────────────────────────────────────────────────────
+
+async function loadTraces() {
+  const agent = document.getElementById('trace-agent-filter').value
+  const params = agent ? `?agent=${agent}` : ''
+  const res = await fetch(`/api/traces/sessions${params}`)
+  const sessions = await res.json()
+  renderTraceSessions(sessions)
+}
+
+function renderTraceSessions(sessions) {
+  const el = document.getElementById('traces-content')
+  if (sessions.length === 0) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No trace sessions found. Run quest to generate traces.</div>'
+    return
+  }
+  el.innerHTML = `
+    <div class="list-row list-header" style="grid-template-columns: 32px 1fr 100px 80px 120px 100px">
+      <div></div><div>Session</div><div>Agent</div><div>Turns</div><div>Tokens</div><div>Duration</div>
+    </div>
+    ${sessions.map(s => {
+      const dur = s.ended_at ? `${((s.ended_at - s.started_at) / 1000).toFixed(0)}s` : 'running'
+      const statusCls = s.status === 'completed' ? 'pass' : 'pending'
+      const agentColor = s.agent === 'coder' ? 'var(--accent)' : s.agent === 'eval' ? 'var(--purple)' : 'var(--text-muted)'
+      return `
+        <div class="list-row" style="grid-template-columns: 32px 1fr 100px 80px 120px 100px;cursor:pointer" onclick="openTraceSession('${s.session_id}')">
+          <div><div class="status-dot ${statusCls}"></div></div>
+          <div>
+            <div style="font-weight:500">${esc(s.topic)}</div>
+            <div style="font-size:11px;color:var(--text-dim)">${s.session_id}${s.feature_id ? ' | ' + s.feature_id : ''}</div>
+          </div>
+          <div><span style="color:${agentColor}">${s.agent}</span></div>
+          <div>${s.turns}</div>
+          <div style="font-size:12px">${s.input_tokens}↑ ${s.output_tokens}↓</div>
+          <div>${dur}</div>
+        </div>
+      `
+    }).join('')}
+  `
+}
+
+async function openTraceSession(sessionId) {
+  const [sessionRes, eventsRes] = await Promise.all([
+    fetch(`/api/traces/sessions/${sessionId}`),
+    fetch(`/api/traces/sessions/${sessionId}/events`),
+  ])
+  const session = await sessionRes.json()
+  const events = await eventsRes.json()
+
+  const dur = session.ended_at ? `${((session.ended_at - session.started_at) / 1000).toFixed(1)}s` : 'running'
+  document.getElementById('trace-modal-title').textContent = session.topic
+  document.getElementById('trace-meta').innerHTML = `
+    <strong>${session.agent}</strong> | Model: ${session.model} | ${session.turns} turns | ${session.input_tokens}↑ ${session.output_tokens}↓ | ${dur} | ${session.status}
+    ${session.feature_id ? `| Feature: ${session.feature_id}` : ''}
+    ${session.worker_id ? `| Worker: W${session.worker_id}` : ''}
+  `
+
+  const lines = events.map(e => {
+    const time = new Date(e.ts).toISOString().split('T')[1]?.split('.')[0] ?? ''
+    switch (e.type) {
+      case 'system_init': return `<span style="color:var(--text-dim)">[${time}] SESSION INIT</span>`
+      case 'tool_call': {
+        const file = e.file_path ? ` <span style="color:var(--accent)">${esc(e.file_path)}</span>` : ''
+        let detail = ''
+        if (e.tool_name === 'Bash' && e.input_json) {
+          try { const o = JSON.parse(e.input_json); if (o.command) detail = `\n  <span style="color:var(--text-muted)">$ ${esc(o.command.slice(0,120))}</span>` } catch {}
+        }
+        return `<span style="color:var(--yellow)">[${time}] ${e.tool_name}</span>${file}${detail}`
+      }
+      case 'assistant_text': {
+        const preview = (e.content_text || '').slice(0, 200)
+        return `<span style="color:var(--green)">[${time}] TEXT:</span> <span style="color:var(--text-muted)">${esc(preview)}${(e.content_text || '').length > 200 ? '...' : ''}</span>`
+      }
+      case 'result': {
+        const status = e.is_error ? '<span style="color:var(--red)">ERROR</span>' : '<span style="color:var(--green)">OK</span>'
+        const tokens = e.input_tokens != null ? ` | ${e.input_tokens}↑ ${e.output_tokens}↓` : ''
+        return `<span style="color:var(--text)">[${time}] RESULT: ${status}${tokens}</span>`
+      }
+      default: return `<span style="color:var(--text-dim)">[${time}] ${e.type}</span>`
+    }
+  })
+
+  document.getElementById('trace-events').innerHTML = lines.join('\n')
+  document.getElementById('trace-modal').classList.add('open')
+}
+
+function closeTraceModal() {
+  document.getElementById('trace-modal').classList.remove('open')
+}
+
+async function searchTraces() {
+  const file = document.getElementById('trace-search').value.trim()
+  if (!file) { loadTraces(); return }
+  const res = await fetch(`/api/traces/search?file=${encodeURIComponent(file)}`)
+  const events = await res.json()
+  const el = document.getElementById('traces-content')
+  if (events.length === 0) {
+    el.innerHTML = `<div style="padding:24px;color:var(--text-muted)">No tool calls found touching "${esc(file)}"</div>`
+    return
+  }
+  el.innerHTML = `
+    <div class="list-row list-header" style="grid-template-columns: 80px 100px 1fr 200px">
+      <div>Time</div><div>Tool</div><div>File</div><div>Session</div>
+    </div>
+    ${events.map(e => `
+      <div class="list-row" style="grid-template-columns: 80px 100px 1fr 200px">
+        <div style="font-size:12px">${new Date(e.ts).toISOString().split('T')[1]?.split('.')[0] ?? ''}</div>
+        <div><span style="color:var(--yellow)">${e.tool_name}</span></div>
+        <div style="font-size:12px;color:var(--accent)">${esc(e.file_path || '')}</div>
+        <div style="font-size:11px;color:var(--text-dim)">${e.agent} — ${e.topic}</div>
+      </div>
+    `).join('')}
+  `
+}
+
+async function loadCostByAgent() {
+  const res = await fetch('/api/traces/cost-by-agent')
+  const rows = await res.json()
+  const el = document.getElementById('traces-content')
+  if (rows.length === 0) { el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No data</div>'; return }
+  el.innerHTML = `
+    <div class="list-row list-header" style="grid-template-columns: 100px 200px 80px 120px 120px 80px">
+      <div>Agent</div><div>Model</div><div>Sessions</div><div>Input Tokens</div><div>Output Tokens</div><div>Turns</div>
+    </div>
+    ${rows.map(r => `
+      <div class="list-row" style="grid-template-columns: 100px 200px 80px 120px 120px 80px">
+        <div style="font-weight:500">${r.agent}</div>
+        <div style="font-size:12px;color:var(--text-muted)">${r.model}</div>
+        <div>${r.sessions}</div>
+        <div>${r.total_input?.toLocaleString() ?? 0}</div>
+        <div>${r.total_output?.toLocaleString() ?? 0}</div>
+        <div>${r.total_turns}</div>
+      </div>
+    `).join('')}
+  `
+}
+
+async function loadTopTools() {
+  const res = await fetch('/api/traces/top-tools')
+  const rows = await res.json()
+  const el = document.getElementById('traces-content')
+  if (rows.length === 0) { el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No data</div>'; return }
+  el.innerHTML = `
+    <div class="list-row list-header" style="grid-template-columns: 200px 100px 100px">
+      <div>Tool</div><div>Calls</div><div>Sessions</div>
+    </div>
+    ${rows.map(r => `
+      <div class="list-row" style="grid-template-columns: 200px 100px 100px">
+        <div style="font-weight:500;color:var(--yellow)">${r.tool_name}</div>
+        <div>${r.count}</div>
+        <div>${r.sessions}</div>
+      </div>
+    `).join('')}
+  `
+}
+
+// Close modals on Escape
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeTraceModal() } })
+document.getElementById('modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal() })
+document.getElementById('trace-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeTraceModal() })
+
+load()
+</script>
+</body>
+</html>
