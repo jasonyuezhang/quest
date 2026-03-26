@@ -18,10 +18,15 @@ export type QuestEvent =
   | { ts: string; type: 'agent_start'; agent: AgentLabel; featureId?: string; resetCount?: number; workerId?: number }
   | { ts: string; type: 'tool_use'; agent: AgentLabel; tool: string; summary: string; turn: number; workerId?: number }
   | { ts: string; type: 'tool_progress'; agent: AgentLabel; tool: string; elapsedSeconds: number; workerId?: number }
-  | { ts: string; type: 'agent_done'; agent: AgentLabel; featureId?: string; turns: number; durationMs: number; success: boolean; inputTokens?: number; outputTokens?: number; workerId?: number }
+  | { ts: string; type: 'agent_done'; agent: AgentLabel; featureId?: string; turns: number; durationMs: number; success: boolean; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; workerId?: number }
   | { ts: string; type: 'context_reset'; featureId: string; resetCount: number; workerId?: number }
+  | { ts: string; type: 'context_warning'; featureId?: string; usagePct: number; contextTokens: number; workerId?: number }
+  | { ts: string; type: 'session_token_usage'; featureId?: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; workerId?: number }
   | { ts: string; type: 'eval_verdict'; featureId: string; verdict: 'pass' | 'fail'; criteriaResults: Array<{ criterion: string; result: 'pass' | 'fail'; evidence: string }>; workerId?: number }
-  | { ts: string; type: 'feature_done'; featureId: string; verdict: 'pass' | 'fail'; attempt: number; durationMs: number; workerId?: number }
+  | { ts: string; type: 'feature_done'; featureId: string; verdict: 'pass' | 'fail'; attempt: number; durationMs: number; failureCategory?: string; workerId?: number }
+  | { ts: string; type: 'dag_built'; levels: number; criticalPath: string[]; maxParallelism: number; totalFeatures: number }
+  | { ts: string; type: 'batch_plan'; ready: number; dispatching: number; inFlight: number; reason: string }
+  | { ts: string; type: 'feature_unblocked'; featureId: string; unblockedBy: string }
   | { ts: string; type: 'run_complete'; passing: number; total: number; durationMs: number }
 
 const EVENT_LOG_FILE = 'quest-events.jsonl'

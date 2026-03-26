@@ -453,6 +453,8 @@ export class Orchestrator {
       writeCurrentFeature(worktreeDir, feature),
     ])
 
+    let lastWorktreeFailureCategory: string | undefined
+
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const attemptLabel = attempt > 0 ? ` retry ${attempt}` : ''
 
@@ -532,8 +534,8 @@ export class Orchestrator {
         .filter(r => r.result === 'fail')
         .map(r => r.evidence)
         .join(' ')
-      const worktreeFailureCategory = classifyFailure(failingEvidence)
-      const reportWithCategory = { ...report, failureCategory: worktreeFailureCategory }
+      lastWorktreeFailureCategory = classifyFailure(failingEvidence)
+      const reportWithCategory = { ...report, failureCategory: lastWorktreeFailureCategory }
       await writeEvalReport(worktreeDir, reportWithCategory).catch(() => {})
     }
 
@@ -543,6 +545,7 @@ export class Orchestrator {
       verdict: 'fail',
       durationMs: Date.now() - startTime,
       error: `Failed after ${retryLimit + 1} attempts`,
+      failureCategory: lastWorktreeFailureCategory,
     }
   }
 

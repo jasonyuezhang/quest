@@ -2,6 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount } from '../logger.js'
+import type { TraceSession } from '../trace.js'
 
 /**
  * System prompt for the evaluator (verifier) agent.
@@ -105,6 +106,7 @@ export async function runEvaluatorAgent(
   projectDir: string,
   featureId: string,
   contextManager: ContextManager,
+  traceSession?: TraceSession | null,
 ): Promise<AgentResult> {
   const startTime = Date.now()
 
@@ -137,6 +139,7 @@ If verdict is "pass", also update features.json to set passes:true for this feat
       },
     })) {
       logMessage('eval', message)
+      traceSession?.recordSDKMessage(message as Parameters<TraceSession['recordSDKMessage']>[0])
       if (message.type === 'result') {
         sessionId = message.session_id ?? sessionId
         success = !message.is_error

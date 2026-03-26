@@ -18,7 +18,7 @@ import { runEvaluatorAgent } from './agents/evaluator.js'
 import { ContextManager } from './context/manager.js'
 import { buildSprintContract, writeSprintContract, readEvalReport } from './sprint/contracts.js'
 import { detectProjectState } from './detect.js'
-import { readEvents } from './events.js'
+import { readEvents, type QuestEvent } from './events.js'
 
 program
   .name('quest')
@@ -259,9 +259,10 @@ program
       if (opts.failures) {
         // Show failures grouped by category from quest-events.jsonl
         const events = readEvents(projectDir)
+        type FeatureDoneEvent = Extract<QuestEvent, { type: 'feature_done' }>
         const failEvents = events.filter(
-          e => e.type === 'feature_done' && e.verdict === 'fail',
-        ) as Array<{ ts: string; type: 'feature_done'; featureId: string; verdict: 'fail'; attempt: number; durationMs: number; failureCategory?: string; workerId?: number }>
+          (e): e is FeatureDoneEvent => e.type === 'feature_done' && e.verdict === 'fail',
+        )
 
         if (failEvents.length === 0) {
           console.log(chalk.green('\nNo failures recorded in quest-events.jsonl.\n'))
