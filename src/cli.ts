@@ -19,6 +19,7 @@ import { ContextManager } from './context/manager.js'
 import { buildSprintContract, writeSprintContract, readEvalReport } from './sprint/contracts.js'
 import { detectProjectState } from './detect.js'
 import { readEvents, type QuestEvent } from './events.js'
+import { computeRunCost } from './cost.js'
 
 program
   .name('quest')
@@ -256,10 +257,55 @@ program
   .description('Show progress summary (features passing, current feature, etc.)')
   .option('--show-all', 'Show all features, not just pending', false)
   .option('--failures', 'Show a summary table of failures grouped by category', false)
-  .action(async (projectDirArg: string | undefined, opts: { showAll: boolean; failures: boolean }) => {
+  .option('--cost', 'Show total estimated API cost for the run, broken down by agent type', false)
+  .action(async (projectDirArg: string | undefined, opts: { showAll: boolean; failures: boolean; cost: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     try {
+      if (opts.cost) {
+        // Show cost breakdown from quest-events.jsonl
+        const costEvents = readEvents(projectDir)
+        const costSummary = computeRunCost(costEvents)
+
+        if (costSummary.byAgent.length === 0) {
+          console.log(chalk.gray('\nNo cost data found in quest-events.jsonl.\n'))
+          console.log(chalk.gray('Run `quest run` to generate cost data.'))
+          return
+        }
+
+        console.log(chalk.bold(`\nEstimated API Cost\n`))
+        console.log(chalk.bold(`Total: ${chalk.green(`$${costSummary.totalCostUsd.toFixed(4)}`)} USD\n`))
+
+        // Print table header
+        const colW = [10, 14, 14, 14, 12]
+        const header = [
+          'Agent'.padEnd(colW[0]),
+          'Input Tokens'.padEnd(colW[1]),
+          'Output Tokens'.padEnd(colW[2]),
+          'Cache Reads'.padEnd(colW[3]),
+          'Cost (USD)',
+        ].join('  ')
+        console.log(chalk.bold(header))
+        console.log('-'.repeat(header.length))
+
+        for (const breakdown of costSummary.byAgent) {
+          const agentColor =
+            breakdown.agent === 'coder' ? chalk.cyan :
+            breakdown.agent === 'eval' ? chalk.magenta :
+            breakdown.agent === 'init' ? chalk.blue :
+            chalk.gray
+          console.log(
+            agentColor(breakdown.agent.padEnd(colW[0])) + '  ' +
+            String(breakdown.inputTokens).padEnd(colW[1]) + '  ' +
+            String(breakdown.outputTokens).padEnd(colW[2]) + '  ' +
+            String(breakdown.cacheReadTokens).padEnd(colW[3]) + '  ' +
+            chalk.green(`$${breakdown.estimatedUsd.toFixed(4)}`),
+          )
+        }
+        console.log()
+        return
+      }
+
       if (opts.failures) {
         // Show failures grouped by category from quest-events.jsonl
         const events = readEvents(projectDir)
