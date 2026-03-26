@@ -1,0 +1,75 @@
+name: Auto Version Bump
+
+on:
+  push:
+    branches: [main]
+    # Don't trigger on version bump commits themselves (infinite loop prevention)
+    paths-ignore:
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  version:
+    name: Bump semantic version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to push the version commit + tag
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so we can read commit messages
+          fetch-depth: 0
+          # Use a token with push rights (PAT or default GITHUB_TOKEN)
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Determine version bump from commit message
+        id: bump
+        run: |
+          # Read the commit message that triggered this push
+          MSG=$(git log -1 --pretty=%B)
+          echo "Commit: $MSG"
+
+          # Breaking change → major
+          if echo "$MSG" | grep -qE '^feat!:|^fix!:|BREAKING CHANGE'; then
+            echo "type=major" >> $GITHUB_OUTPUT
+
+          # New feature → minor
+          elif echo "$MSG" | grep -qE '^feat(\(.+\))?:'; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+
+          # Fix, perf, refactor, chore → patch
+          elif echo "$MSG" | grep -qE '^(fix|perf|refactor|chore|build|ci|docs|style|test)(\(.+\))?:'; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+
+          # Anything else → patch
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BUMP=${{ steps.bump.outputs.type }}
+          npm version $BUMP --no-git-tag-version
+
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "New version: $NEW_VERSION"
+
+          git add package.json package-lock.json
+          git commit -m "chore: release v${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin main --tags
