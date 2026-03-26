@@ -13,15 +13,15 @@ import { join } from 'node:path'
 import type { AgentLabel } from './logger.js'
 
 export type QuestEvent =
-  | { ts: string; type: 'run_start'; projectName: string; total: number }
-  | { ts: string; type: 'feature_start'; featureId: string; featureName: string; priority: string; index: number; total: number }
-  | { ts: string; type: 'agent_start'; agent: AgentLabel; featureId?: string; resetCount?: number }
-  | { ts: string; type: 'tool_use'; agent: AgentLabel; tool: string; summary: string; turn: number }
-  | { ts: string; type: 'tool_progress'; agent: AgentLabel; tool: string; elapsedSeconds: number }
-  | { ts: string; type: 'agent_done'; agent: AgentLabel; featureId?: string; turns: number; durationMs: number; success: boolean; inputTokens?: number; outputTokens?: number }
-  | { ts: string; type: 'context_reset'; featureId: string; resetCount: number }
-  | { ts: string; type: 'eval_verdict'; featureId: string; verdict: 'pass' | 'fail'; criteriaResults: Array<{ criterion: string; result: 'pass' | 'fail'; evidence: string }> }
-  | { ts: string; type: 'feature_done'; featureId: string; verdict: 'pass' | 'fail'; attempt: number; durationMs: number }
+  | { ts: string; type: 'run_start'; projectName: string; total: number; concurrency?: number }
+  | { ts: string; type: 'feature_start'; featureId: string; featureName: string; priority: string; index: number; total: number; workerId?: number }
+  | { ts: string; type: 'agent_start'; agent: AgentLabel; featureId?: string; resetCount?: number; workerId?: number }
+  | { ts: string; type: 'tool_use'; agent: AgentLabel; tool: string; summary: string; turn: number; workerId?: number }
+  | { ts: string; type: 'tool_progress'; agent: AgentLabel; tool: string; elapsedSeconds: number; workerId?: number }
+  | { ts: string; type: 'agent_done'; agent: AgentLabel; featureId?: string; turns: number; durationMs: number; success: boolean; inputTokens?: number; outputTokens?: number; workerId?: number }
+  | { ts: string; type: 'context_reset'; featureId: string; resetCount: number; workerId?: number }
+  | { ts: string; type: 'eval_verdict'; featureId: string; verdict: 'pass' | 'fail'; criteriaResults: Array<{ criterion: string; result: 'pass' | 'fail'; evidence: string }>; workerId?: number }
+  | { ts: string; type: 'feature_done'; featureId: string; verdict: 'pass' | 'fail'; attempt: number; durationMs: number; workerId?: number }
   | { ts: string; type: 'run_complete'; passing: number; total: number; durationMs: number }
 
 const EVENT_LOG_FILE = 'quest-events.jsonl'

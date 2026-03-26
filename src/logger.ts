@@ -55,14 +55,29 @@ const AGENT_LABEL: Record<AgentLabel, string> = {
   eval:  chalk.magenta('[eval]'),
 }
 
-let turnCount = 0
-let currentAgentLabel: AgentLabel | undefined
-let agentStartTime = Date.now()
+interface WorkerLogState {
+  turnCount: number
+  agentLabel: AgentLabel | undefined
+  startTime: number
+}
+
+/** Per-worker log state. Worker 0 is the default (sequential mode). */
+const workerStates = new Map<number, WorkerLogState>()
+
+function getWorkerState(workerId: number): WorkerLogState {
+  let state = workerStates.get(workerId)
+  if (!state) {
+    state = { turnCount: 0, agentLabel: undefined, startTime: Date.now() }
+    workerStates.set(workerId, state)
+  }
+  return state
+}
 
 /** Reset turn counter at the start of each agent session */
-export function resetTurnCount() {
-  turnCount = 0
-  agentStartTime = Date.now()
+export function resetTurnCount(workerId = 0) {
+  const state = getWorkerState(workerId)
+  state.turnCount = 0
+  state.startTime = Date.now()
 }
 
 /** Print a section header banner when an agent phase begins */
@@ -71,6 +86,7 @@ export function printAgentBanner(
   step: number,
   totalSteps: number,
   detail?: string,
+  workerId = 0,
 ): void {
   const labels: Record<AgentLabel, string> = {
     init:  'Initializer',
@@ -86,34 +102,38 @@ export function printAgentBanner(
   const name = labels[agent]
   const stepStr = chalk.gray(`[${step}/${totalSteps}]`)
   const detailStr = detail ? chalk.gray(` — ${detail}`) : ''
+  const workerTag = workerId > 0 ? chalk.yellow(`[W${workerId}] `) : ''
   const line = '─'.repeat(50)
   process.stdout.write(`\n${chalk.gray(line)}\n`)
-  process.stdout.write(`${stepStr} ${color(name)}${detailStr}\n`)
+  process.stdout.write(`${workerTag}${stepStr} ${color(name)}${detailStr}\n`)
   process.stdout.write(`${chalk.gray(line)}\n`)
 
   setCurrentAgent(agent)
-  currentAgentLabel = agent
+  const state = getWorkerState(workerId)
+  state.agentLabel = agent
 }
 
 /**
  * Log progress from an SDK message.
  * Also emits structured events to the event log for the monitor TUI.
  */
-export function logMessage(agent: AgentLabel, message: SDKMessage): void {
-  const prefix = `${AGENT_LABEL[agent]} `
+export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0): void {
+  const state = getWorkerState(workerId)
+  const workerTag = workerId > 0 ? chalk.yellow(`[W${workerId}]`) : ''
+  const prefix = `${workerTag}${AGENT_LABEL[agent]} `
 
   if (message.type === 'assistant') {
-    turnCount++
+    state.turnCount++
     for (const block of message.message.content) {
       if (block.type === 'tool_use') {
         const { icon, color } = toolDisplay(block.name)
         const summary = summarizeInput(block.name, block.input)
         const toolStr = color(`${block.name}`)
         const summaryStr = summary ? chalk.gray(` ${summary}`) : ''
-        const turnStr = chalk.gray(` t${turnCount}`)
+        const turnStr = chalk.gray(` t${state.turnCount}`)
         process.stdout.write(`${prefix}${icon} ${toolStr}${summaryStr}${turnStr}\n`)
 
-        emit({ type: 'tool_use', agent, tool: block.name, summary, turn: turnCount })
+        emit({ type: 'tool_use', agent, tool: block.name, summary, turn: state.turnCount, workerId })
       }
     }
   }
@@ -124,7 +144,7 @@ export function logMessage(agent: AgentLabel, message: SDKMessage): void {
     process.stdout.write(
       `${prefix}${icon} ${color(message.tool_name)} ${chalk.gray(`${elapsed}s…`)}\n`
     )
-    emit({ type: 'tool_progress', agent, tool: message.tool_name, elapsedSeconds: message.elapsed_time_seconds })
+    emit({ type: 'tool_progress', agent, tool: message.tool_name, elapsedSeconds: message.elapsed_time_seconds, workerId })
   }
 
   if (message.type === 'result') {
@@ -138,23 +158,24 @@ export function logMessage(agent: AgentLabel, message: SDKMessage): void {
     if (message.is_error) {
       process.stdout.write(`${prefix}${chalk.red('✗ error')}${tokens}\n`)
     } else {
-      process.stdout.write(`${prefix}${chalk.green('✓ done')} — ${turnCount} turns${tokens}\n`)
+      process.stdout.write(`${prefix}${chalk.green('✓ done')} — ${state.turnCount} turns${tokens}\n`)
     }
 
     emit({
       type: 'agent_done',
       agent,
-      turns: turnCount,
-      durationMs: Date.now() - agentStartTime,
+      turns: state.turnCount,
+      durationMs: Date.now() - state.startTime,
       success: !message.is_error,
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
+      workerId,
     })
   }
 
   if (message.type === 'system' && message.subtype === 'init') {
-    turnCount = 0
+    state.turnCount = 0
     process.stdout.write(`${prefix}${chalk.gray('session started')}\n`)
-    emit({ type: 'agent_start', agent })
+    emit({ type: 'agent_start', agent, workerId })
   }
 }

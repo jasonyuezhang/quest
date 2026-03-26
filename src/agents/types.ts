@@ -129,6 +129,16 @@ export interface ProgressState {
   contextResets: number
 }
 
+/** Result from a parallel worker implementing a feature */
+export interface WorkerResult {
+  workerId: number
+  feature: Feature
+  verdict: 'pass' | 'fail'
+  commitSha?: string
+  durationMs: number
+  error?: string
+}
+
 /** Orchestrator configuration */
 export interface OrchestratorOptions {
   projectDir: string
@@ -142,4 +152,6 @@ export interface OrchestratorOptions {
   dryRun?: boolean
   /** Override model for all agents */
   model?: string
+  /** Number of features to implement in parallel (default: 1 = sequential) */
+  concurrency?: number
 }
