@@ -25,7 +25,8 @@ import {
 import { classifyFailure } from './failure-classifier.js'
 import type { FailureCategory } from './failure-classifier.js'
 import { printAgentBanner } from './logger.js'
-import { initEventLog, emit } from './events.js'
+import { initEventLog, emit, readEvents } from './events.js'
+import { computeRunCost } from './cost.js'
 import {
   createWorktree,
   removeWorktree,
@@ -99,6 +100,10 @@ export class Orchestrator {
   private tracer: Tracer
   private agentGit: AgentGit
 
+  /** Set to true when SIGINT/SIGTERM is received — stops dispatching new work */
+  shutdownRequested = false
+  private shutdownListeners: Array<() => void> = []
+
   constructor(opts: OrchestratorOptions) {
     this.opts = {
       maxFeatures: Infinity,
@@ -115,6 +120,74 @@ export class Orchestrator {
     }
     this.tracer = new Tracer(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
+  }
+
+  /**
+   * Signal graceful shutdown — sets the flag so the current agent turn finishes
+   * before the orchestrator exits cleanly.
+   */
+  requestShutdown(): void {
+    if (!this.shutdownRequested) {
+      console.log(chalk.yellow('\n⚠ Shutdown requested — finishing current operation then stopping...'))
+      this.shutdownRequested = true
+    }
+  }
+
+  /** Register SIGINT/SIGTERM handlers that set the shutdown flag */
+  private registerShutdownHandlers(): void {
+    const handler = () => this.requestShutdown()
+    process.on('SIGINT', handler)
+    process.on('SIGTERM', handler)
+    this.shutdownListeners = [
+      () => process.off('SIGINT', handler),
+      () => process.off('SIGTERM', handler),
+    ]
+  }
+
+  /** Remove signal handlers (called in finally block) */
+  private unregisterShutdownHandlers(): void {
+    for (const off of this.shutdownListeners) off()
+    this.shutdownListeners = []
+  }
+
+  /**
+   * Commit any partial work and update state for clean resume after interruption.
+   * Emits a 'shutdown' event, creates a wip commit, and ensures progress tracks
+   * the interrupted feature so `quest resume` picks up correctly.
+   */
+  private async performGracefulShutdown(featureId: string, featureName: string): Promise<void> {
+    const { projectDir } = this.opts
+
+    // Emit shutdown event to quest-events.jsonl
+    emit({ type: 'shutdown', featureId, featureName, reason: 'SIGINT/SIGTERM received' })
+
+    // Commit any uncommitted partial work with the wip message
+    try {
+      const { stdout } = await execAsync('git status --porcelain', { cwd: projectDir })
+      if (stdout.trim()) {
+        await execAsync(
+          `git add -A && git commit -m "wip: partial implementation of ${featureName} (interrupted)"`,
+          { cwd: projectDir },
+        )
+        console.log(chalk.yellow(`  Committed partial work for ${featureId}`))
+      }
+    } catch {
+      // Best-effort — non-fatal if nothing to commit or git not available
+    }
+
+    // Update progress: keep currentFeatureId set so `quest resume` knows where to restart
+    try {
+      const progress = await readProgress(projectDir)
+      await writeProgress(projectDir, {
+        ...progress,
+        currentFeatureId: featureId,
+      })
+    } catch {
+      // Non-fatal
+    }
+
+    console.log(chalk.yellow(`\n⚠ Interrupted while working on: ${featureId}`))
+    console.log(chalk.gray('  Run `quest resume` to continue from where you left off.'))
   }
 
   /**
@@ -253,6 +326,10 @@ export class Orchestrator {
   /**
    * Full orchestration loop: implements features until all pass or limits are reached.
    * Delegates to runDAGScheduled when maxConcurrency > 1.
+   *
+   * Registers SIGINT/SIGTERM handlers that set `shutdownRequested`. The current agent
+   * session completes its turn, then the loop checks the flag and exits gracefully:
+   * emitting a shutdown event, committing partial work, and updating progress for resume.
    */
   async run(): Promise<void> {
     const { projectDir, maxFeatures, dryRun, maxConcurrency } = this.opts
@@ -262,58 +339,81 @@ export class Orchestrator {
     await this.runInitSh()
     await this.agentGit.init()
 
-    if (maxConcurrency > 1) {
-      await this.runDAGScheduled()
-      return
-    }
+    this.registerShutdownHandlers()
 
-    let implemented = 0
-    let failed = 0
+    try {
+      if (maxConcurrency > 1) {
+        await this.runDAGScheduled()
+        return
+      }
 
-    while (implemented + failed < maxFeatures) {
-      const featuresData = await readFeaturesFile(projectDir)
-      const next = getNextFeature(featuresData.features)
+      let implemented = 0
+      let failed = 0
 
-      if (!next) {
-        console.log(chalk.green('\n✅ All features implemented!'))
+      while (implemented + failed < maxFeatures) {
+        // Check shutdown flag before starting a new feature
+        if (this.shutdownRequested) {
+          const featuresData = await readFeaturesFile(projectDir)
+          const inProgress = getNextFeature(featuresData.features)
+          if (inProgress) {
+            await this.performGracefulShutdown(inProgress.id, inProgress.name)
+          }
+          break
+        }
+
+        const featuresData = await readFeaturesFile(projectDir)
+        const next = getNextFeature(featuresData.features)
+
+        if (!next) {
+          console.log(chalk.green('\n✅ All features implemented!'))
+          const total = featuresData.features.length
+          const costSummary = computeRunCost(readEvents(projectDir))
+          emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+          break
+        }
+
         const total = featuresData.features.length
-        emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart })
-        break
+        const passing = countPassing(featuresData.features)
+        const pct = Math.round((passing / total) * 100)
+        console.log(
+          chalk.bold(`\n◆ Feature ${passing + 1}/${total} (${pct}% done) — ${chalk.white(next.id)}`) +
+            chalk.gray(` [${next.priority}]`),
+        )
+        console.log(chalk.gray(`  ${next.description}`))
+        emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
+
+        if (dryRun) {
+          console.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
+          implemented++
+          continue
+        }
+
+        const { verdict, failureCategory } = await this.implementFeature(next)
+
+        // Check shutdown flag after implementFeature — the agent session has completed
+        if (this.shutdownRequested) {
+          await this.performGracefulShutdown(next.id, next.name)
+          break
+        }
+
+        if (verdict === 'pass') {
+          implemented++
+          console.log(chalk.green(`\n✓ ${next.id} passed`))
+        } else {
+          failed++
+          console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
+          await this.markFeatureSkipped(next)
+        }
+        emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0, failureCategory })
       }
 
-      const total = featuresData.features.length
-      const passing = countPassing(featuresData.features)
-      const pct = Math.round((passing / total) * 100)
+      const summary = await this.getStatus()
       console.log(
-        chalk.bold(`\n◆ Feature ${passing + 1}/${total} (${pct}% done) — ${chalk.white(next.id)}`) +
-          chalk.gray(` [${next.priority}]`),
+        chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing`),
       )
-      console.log(chalk.gray(`  ${next.description}`))
-      emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
-
-      if (dryRun) {
-        console.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
-        implemented++
-        continue
-      }
-
-      const { verdict, failureCategory } = await this.implementFeature(next)
-
-      if (verdict === 'pass') {
-        implemented++
-        console.log(chalk.green(`\n✓ ${next.id} passed`))
-      } else {
-        failed++
-        console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
-        await this.markFeatureSkipped(next)
-      }
-      emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0, failureCategory })
+    } finally {
+      this.unregisterShutdownHandlers()
     }
-
-    const summary = await this.getStatus()
-    console.log(
-      chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing`),
-    )
   }
 
   /**
@@ -361,7 +461,8 @@ export class Orchestrator {
     const pending = allFeatures.filter(f => !f.passes)
     if (pending.length === 0) {
       console.log(chalk.green('\n✅ All features already implemented!'))
-      emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: 0 })
+      const earlyExitCost = computeRunCost(readEvents(projectDir))
+      emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd, costByAgent: earlyExitCost.byAgent })
       return
     }
 
@@ -408,42 +509,62 @@ export class Orchestrator {
           console.log(chalk.gray(`\n  scheduler: ${batch.reason}`))
         }
 
-        // Dispatch new features
-        for (const feature of batch.features) {
-          const worktree = await workerPool.acquire(projectDir)
-          worktreeMap.set(feature.id, worktree)
+        // Dispatch new features — skip if shutdown was requested
+        if (!this.shutdownRequested) {
+          for (const feature of batch.features) {
+            const worktree = await workerPool.acquire(projectDir)
+            worktreeMap.set(feature.id, worktree)
 
-          emit({
-            type: 'feature_start',
-            featureId: feature.id,
-            featureName: feature.name,
-            priority: feature.priority,
-            index: completed.size + inFlight.size + 1,
-            total,
-            workerId: worktree.workerId,
-          })
-          console.log(chalk.bold(`  [W${worktree.workerId}] ${feature.id}`) + chalk.gray(` — ${feature.description.slice(0, 60)}`))
+            emit({
+              type: 'feature_start',
+              featureId: feature.id,
+              featureName: feature.name,
+              priority: feature.priority,
+              index: completed.size + inFlight.size + 1,
+              total,
+              workerId: worktree.workerId,
+            })
+            console.log(chalk.bold(`  [W${worktree.workerId}] ${feature.id}`) + chalk.gray(` — ${feature.description.slice(0, 60)}`))
 
-          // Launch worker — wrap result with featureId for identification
-          const featureId = feature.id
-          const promise = this.runFeatureInWorktree(worktree, feature)
-            .then(result => ({ featureId, result }))
-            .catch(err => ({
-              featureId,
-              result: {
-                workerId: worktree.workerId,
-                feature,
-                verdict: 'fail' as const,
-                durationMs: 0,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            }))
+            // Launch worker — wrap result with featureId for identification
+            const featureId = feature.id
+            const promise = this.runFeatureInWorktree(worktree, feature)
+              .then(result => ({ featureId, result }))
+              .catch(err => ({
+                featureId,
+                result: {
+                  workerId: worktree.workerId,
+                  feature,
+                  verdict: 'fail' as const,
+                  durationMs: 0,
+                  error: err instanceof Error ? err.message : String(err),
+                },
+              }))
 
-          inFlight.set(featureId, promise)
+            inFlight.set(featureId, promise)
+          }
         }
 
-        // If nothing in-flight and nothing ready, we're done (or blocked)
+        // If nothing in-flight and nothing ready, we're done (or blocked or shutting down)
         if (inFlight.size === 0) {
+          if (this.shutdownRequested) {
+            // Emit shutdown event — use a sentinel since no single feature was "in progress"
+            emit({ type: 'shutdown', featureId: 'parallel-run', featureName: 'parallel run', reason: 'SIGINT/SIGTERM received' })
+            // Commit any uncommitted changes in the main repo
+            try {
+              const { stdout } = await execAsync('git status --porcelain', { cwd: projectDir })
+              if (stdout.trim()) {
+                await execAsync(
+                  'git add -A && git commit -m "wip: partial implementation of parallel run (interrupted)"',
+                  { cwd: projectDir },
+                )
+              }
+            } catch {
+              // Best-effort
+            }
+            console.log(chalk.yellow('\n⚠ Parallel run interrupted. Run `quest resume` to continue.'))
+            break
+          }
           // Check if there are features that can never be reached (failed dependencies)
           const remaining = allFeatures.filter(f => !f.passes && !completed.has(f.id))
           if (remaining.length > 0 && retryQueue.length === 0) {
@@ -518,7 +639,8 @@ export class Orchestrator {
     console.log(
       chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing (${elapsed}s)`),
     )
-    emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: Date.now() - runStart })
+    const costSummary = computeRunCost(readEvents(projectDir))
+    emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
   }
 
   /**

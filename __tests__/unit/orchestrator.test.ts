@@ -448,4 +448,109 @@ describe('orchestrator.ts', () => {
       expect(failEvents).toHaveLength(1)
     })
   })
+
+  describe('graceful shutdown', () => {
+    it('requestShutdown() sets shutdownRequested flag', () => {
+      const orch = new Orchestrator({ projectDir: dir })
+      expect(orch.shutdownRequested).toBe(false)
+      orch.requestShutdown()
+      expect(orch.shutdownRequested).toBe(true)
+    })
+
+    it('requestShutdown() is idempotent', () => {
+      const orch = new Orchestrator({ projectDir: dir })
+      orch.requestShutdown()
+      orch.requestShutdown()
+      expect(orch.shutdownRequested).toBe(true)
+    })
+
+    it('run() stops dispatching when shutdownRequested is set mid-loop', async () => {
+      let coderCallCount = 0
+      mockCoderAgent.mockImplementation(async () => {
+        coderCallCount++
+        return makeAgentResult({ success: true })
+      })
+      mockEvalAgent.mockImplementation(async (projDir: string, featureId: string) => {
+        await writeEvalReport(projDir, 'pass', featureId)
+        return makeAgentResult({ sessionId: 'eval-session' })
+      })
+
+      const dir2 = await (await import('../helpers/tempDir.js')).makeTempProject([
+        makeFeature({ id: 'feat-a', passes: false }),
+        makeFeature({ id: 'feat-b', passes: false }),
+        makeFeature({ id: 'feat-c', passes: false }),
+      ])
+
+      const orch = new Orchestrator({ projectDir: dir2, maxConcurrency: 1, retryLimit: 0 })
+
+      // Inject shutdown after first feature completes — before next feature is dispatched
+      const originalImplFeature = orch.implementFeature.bind(orch)
+      let callIdx = 0
+      vi.spyOn(orch, 'implementFeature').mockImplementation(async (feature) => {
+        const result = await originalImplFeature(feature)
+        callIdx++
+        if (callIdx === 1) {
+          orch.requestShutdown()
+        }
+        return result
+      })
+
+      await orch.run()
+
+      // Only first feature should have been attempted
+      expect(callIdx).toBe(1)
+
+      const { cleanTempDir } = await import('../helpers/tempDir.js')
+      await cleanTempDir(dir2)
+    })
+
+    it('emits shutdown event to quest-events.jsonl', async () => {
+      mockCoderAgent.mockResolvedValue(makeAgentResult({ success: true }))
+      mockEvalAgent.mockImplementation(async (projDir: string, featureId: string) => {
+        await writeEvalReport(projDir, 'pass', featureId)
+        return makeAgentResult({ sessionId: 'eval-session' })
+      })
+
+      initEventLog(dir)
+
+      const orch = new Orchestrator({ projectDir: dir, maxConcurrency: 1, retryLimit: 0 })
+
+      // Trigger shutdown after implementFeature returns
+      const originalImplFeature = orch.implementFeature.bind(orch)
+      vi.spyOn(orch, 'implementFeature').mockImplementation(async (feature) => {
+        const result = await originalImplFeature(feature)
+        orch.requestShutdown()
+        return result
+      })
+
+      await orch.run()
+
+      const events = readEvents(dir)
+      const shutdownEvents = events.filter(e => e.type === 'shutdown')
+      expect(shutdownEvents.length).toBeGreaterThan(0)
+    })
+
+    it('writes progress with currentFeatureId on graceful shutdown', async () => {
+      const { readFile } = await import('node:fs/promises')
+      mockCoderAgent.mockResolvedValue(makeAgentResult({ success: true }))
+      mockEvalAgent.mockImplementation(async (projDir: string, featureId: string) => {
+        await writeEvalReport(projDir, 'fail', featureId)
+        return makeAgentResult({ sessionId: 'eval-session' })
+      })
+
+      initEventLog(dir)
+
+      const orch = new Orchestrator({ projectDir: dir, maxConcurrency: 1, retryLimit: 0 })
+
+      // Request shutdown before any feature starts
+      orch.requestShutdown()
+      await orch.run()
+
+      // Progress file should still have currentFeatureId set (set by implementFeature start
+      // or by performGracefulShutdown) indicating the interrupted state
+      const progress = JSON.parse(await readFile(join(dir, 'claude-progress.txt'), 'utf-8'))
+      // After shutdown before any work: currentFeatureId is set to the next feature
+      expect(progress).toHaveProperty('currentFeatureId')
+    })
+  })
 })
