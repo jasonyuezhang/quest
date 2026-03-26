@@ -6,6 +6,12 @@
 import type { QuestEvent } from '../events.js'
 import type { AgentLabel } from '../logger.js'
 
+export interface ToolCallRecord {
+  tool: string
+  summary: string
+  turn: number
+}
+
 export interface AgentSession {
   agent: AgentLabel
   startedAt: string
@@ -14,6 +20,7 @@ export interface AgentSession {
   turns: number
   lastTool?: string
   lastToolSummary?: string
+  toolCalls: ToolCallRecord[]
   success?: boolean
   inputTokens?: number
   outputTokens?: number
@@ -33,6 +40,8 @@ export interface FeatureRun {
   coderSessions: AgentSession[]   // may have multiple if context resets
   evalSession?: AgentSession
   criteriaResults?: Array<{ criterion: string; result: 'pass' | 'fail'; evidence: string }>
+  /** Previous failed attempts before this retry */
+  retryHistory: FeatureRun[]
 }
 
 export interface MonitorState {
@@ -45,6 +54,8 @@ export interface MonitorState {
   activeAgent: AgentLabel | null
   runStartedAt?: string
   runCompletedAt?: string
+  /** All events seen so far, for cost computation */
+  allEvents: QuestEvent[]
 }
 
 const INITIAL_STATE: MonitorState = {
@@ -54,6 +65,7 @@ const INITIAL_STATE: MonitorState = {
   features: [],
   activeFeatureId: null,
   activeAgent: null,
+  allEvents: [],
 }
 
 function getOrCreateFeature(state: MonitorState, featureId: string): FeatureRun {
@@ -68,6 +80,7 @@ function getOrCreateFeature(state: MonitorState, featureId: string): FeatureRun 
       startedAt: new Date().toISOString(),
       attempt: 0,
       coderSessions: [],
+      retryHistory: [],
     }
     state.features.push(f)
   }
@@ -82,7 +95,7 @@ function activeCoderSession(feature: FeatureRun): AgentSession | undefined {
 /** Replay a single event into the mutable state object */
 export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState {
   // Clone top-level to trigger React re-render; features array is mutated in place
-  const s = { ...state, features: [...state.features] }
+  const s = { ...state, features: [...state.features], allEvents: [...state.allEvents, event] }
 
   switch (event.type) {
     case 'run_start':
@@ -96,6 +109,9 @@ export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState
       s.totalFeatures = event.total
       s.activeFeatureId = event.featureId
       const existing = s.features.findIndex(f => f.featureId === event.featureId)
+      // Preserve previous attempt in retry history if this feature has been tried before
+      const previousRun = existing >= 0 ? s.features[existing] : undefined
+      const previousRetryHistory = previousRun?.retryHistory ?? []
       const run: FeatureRun = {
         featureId: event.featureId,
         featureName: event.featureName,
@@ -105,6 +121,9 @@ export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState
         startedAt: event.ts,
         attempt: 0,
         coderSessions: [],
+        retryHistory: previousRun
+          ? [...previousRetryHistory, previousRun]
+          : previousRetryHistory,
       }
       if (existing >= 0) {
         s.features[existing] = run
@@ -127,11 +146,12 @@ export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState
             agent: 'coder',
             startedAt: event.ts,
             turns: 0,
+            toolCalls: [],
             isContextReset: (event.resetCount ?? 0) > 0,
           },
         ]
       } else if (event.agent === 'eval') {
-        f.evalSession = { agent: 'eval', startedAt: event.ts, turns: 0, isContextReset: false }
+        f.evalSession = { agent: 'eval', startedAt: event.ts, turns: 0, toolCalls: [], isContextReset: false }
       }
       break
     }
@@ -147,11 +167,13 @@ export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState
           session.turns = event.turn
           session.lastTool = event.tool
           session.lastToolSummary = event.summary
+          session.toolCalls = [...session.toolCalls, { tool: event.tool, summary: event.summary, turn: event.turn }]
         }
       } else if (event.agent === 'eval' && f.evalSession && !f.evalSession.completedAt) {
         f.evalSession.turns = event.turn
         f.evalSession.lastTool = event.tool
         f.evalSession.lastToolSummary = event.summary
+        f.evalSession.toolCalls = [...f.evalSession.toolCalls, { tool: event.tool, summary: event.summary, turn: event.turn }]
       }
       break
     }
@@ -222,5 +244,5 @@ export function applyEvent(state: MonitorState, event: QuestEvent): MonitorState
 
 /** Build state by replaying all events */
 export function buildState(events: QuestEvent[]): MonitorState {
-  return events.reduce(applyEvent, { ...INITIAL_STATE, features: [] })
+  return events.reduce(applyEvent, { ...INITIAL_STATE, features: [], allEvents: [] })
 }

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Box, Text, useInput, useApp } from 'ink'
 import { readEvents, readNewEvents } from '../events.js'
 import { buildState, applyEvent, type MonitorState, type FeatureRun } from './state.js'
-import type { QuestEvent } from '../events.js'
+import { computeRunCost } from '../cost.js'
 
 const POLL_MS = 500
 
@@ -18,6 +18,10 @@ function fmtMs(ms: number | undefined): string {
 function fmtTokens(n: number | undefined): string {
   if (n === undefined) return '?'
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+function fmtUsd(n: number): string {
+  return `$${n.toFixed(4)}`
 }
 
 function elapsed(from: string): string {
@@ -44,7 +48,7 @@ function ProgressBar({ value, total, width = 30 }: { value: number; total: numbe
   )
 }
 
-function Header({ state }: { state: MonitorState }) {
+function Header({ state, filterFailing, sortByPriority }: { state: MonitorState; filterFailing: boolean; sortByPriority: boolean }) {
   const pct = state.totalFeatures > 0
     ? Math.round((state.passingFeatures / state.totalFeatures) * 100)
     : 0
@@ -57,7 +61,9 @@ function Header({ state }: { state: MonitorState }) {
         <Text color="cyan">{state.projectName}</Text>
         <Text color="gray">  {state.passingFeatures}/{state.totalFeatures} ({pct}%)</Text>
         {runtime ? <Text color="gray">  {runtime}</Text> : null}
-        <Text color="gray">  [q] quit  [↑↓] scroll  [enter] details  [esc] back</Text>
+        {filterFailing ? <Text color="red">  [FAIL]</Text> : null}
+        {sortByPriority ? <Text color="yellow">  [PRI]</Text> : null}
+        <Text color="gray">  [q]quit [↑↓]nav [enter]detail [c]cost [f]fail [r]sort</Text>
       </Box>
       <Box marginTop={0}>
         <ProgressBar value={state.passingFeatures} total={state.totalFeatures} width={40} />
@@ -136,6 +142,7 @@ function FeatureRow({
   const evalMs = feature.evalSession?.durationMs
 
   const resetCount = feature.coderSessions.filter(s => s.isContextReset).length
+  const retryCount = feature.retryHistory.length
 
   return (
     <Box>
@@ -144,6 +151,7 @@ function FeatureRow({
         <Text color={selected ? 'white' : 'gray'}>{feature.featureId.padEnd(32).slice(0, 32)} </Text>
         <Text color={priorityColor(feature.priority)}>[{feature.priority[0]}] </Text>
         {resetCount > 0 ? <Text color="yellow">↺{resetCount} </Text> : <Text>   </Text>}
+        {retryCount > 0 ? <Text color="red">R{retryCount} </Text> : <Text>   </Text>}
         <Text color="gray">code:{fmtMs(coderMs || undefined)}  </Text>
         <Text color="gray">eval:{evalMs ? fmtMs(evalMs) : '─'}</Text>
         {verdict ? (
@@ -156,7 +164,7 @@ function FeatureRow({
   )
 }
 
-function DetailPanel({ feature, onBack }: { feature: FeatureRun; onBack: () => void }) {
+function DetailPanel({ feature }: { feature: FeatureRun }) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="white" paddingX={1} marginTop={1}>
       <Box justifyContent="space-between">
@@ -164,18 +172,34 @@ function DetailPanel({ feature, onBack }: { feature: FeatureRun; onBack: () => v
         <Text color="gray"> [{feature.priority}]  [esc] back</Text>
       </Box>
 
+      {/* Agent timeline: coder sessions with tool call history */}
       {feature.coderSessions.map((s, i) => (
         <Box key={i} flexDirection="column" marginTop={1}>
           <Text color="cyan">
-            CODER{s.isContextReset ? ` (reset #${i})` : ''}
+            {s.isContextReset ? `CODER (context reset #${i})` : `CODER session ${i + 1}`}
             {'  '}
             <Text color="gray">
               {s.turns} turns  {fmtMs(s.durationMs)}  {fmtTokens(s.inputTokens)}↑ {fmtTokens(s.outputTokens)}↓ tokens
             </Text>
           </Text>
+          {s.toolCalls.length > 0 ? (
+            <Box flexDirection="column" paddingLeft={2}>
+              {s.toolCalls.slice(-5).map((tc, j) => (
+                <Box key={j}>
+                  <Text color="gray">t{tc.turn} </Text>
+                  <Text color="yellow">{tc.tool}</Text>
+                  {tc.summary ? <Text color="gray">  {tc.summary.slice(0, 50)}</Text> : null}
+                </Box>
+              ))}
+              {s.toolCalls.length > 5 ? (
+                <Text color="gray">  … +{s.toolCalls.length - 5} more tool calls</Text>
+              ) : null}
+            </Box>
+          ) : null}
         </Box>
       ))}
 
+      {/* Evaluator session with token counts and eval verdict */}
       {feature.evalSession ? (
         <Box flexDirection="column" marginTop={1}>
           <Text color="magenta">
@@ -184,6 +208,17 @@ function DetailPanel({ feature, onBack }: { feature: FeatureRun; onBack: () => v
               {feature.evalSession.turns} turns  {fmtMs(feature.evalSession.durationMs)}  {fmtTokens(feature.evalSession.inputTokens)}↑ {fmtTokens(feature.evalSession.outputTokens)}↓ tokens
             </Text>
           </Text>
+          {feature.evalSession.toolCalls.length > 0 ? (
+            <Box flexDirection="column" paddingLeft={2}>
+              {feature.evalSession.toolCalls.slice(-3).map((tc, j) => (
+                <Box key={j}>
+                  <Text color="gray">t{tc.turn} </Text>
+                  <Text color="yellow">{tc.tool}</Text>
+                  {tc.summary ? <Text color="gray">  {tc.summary.slice(0, 50)}</Text> : null}
+                </Box>
+              ))}
+            </Box>
+          ) : null}
           {feature.verdict ? (
             <Text color={feature.verdict === 'pass' ? 'green' : 'red'}>
               Verdict: {feature.verdict.toUpperCase()}
@@ -192,6 +227,7 @@ function DetailPanel({ feature, onBack }: { feature: FeatureRun; onBack: () => v
         </Box>
       ) : null}
 
+      {/* Eval criteria results */}
       {feature.criteriaResults ? (
         <Box flexDirection="column" marginTop={1}>
           <Text color="gray">Criteria:</Text>
@@ -204,6 +240,70 @@ function DetailPanel({ feature, onBack }: { feature: FeatureRun; onBack: () => v
             </Box>
           ))}
         </Box>
+      ) : null}
+
+      {/* Context reset history */}
+      {feature.coderSessions.filter(s => s.isContextReset).length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="yellow">
+            Context reset history ({feature.coderSessions.filter(s => s.isContextReset).length} reset{feature.coderSessions.filter(s => s.isContextReset).length > 1 ? 's' : ''}):
+          </Text>
+          {feature.coderSessions
+            .filter(s => s.isContextReset)
+            .map((s, i) => (
+              <Box key={i} paddingLeft={2}>
+                <Text color="gray">reset {i + 1}: {s.startedAt}  {fmtMs(s.durationMs)}</Text>
+              </Box>
+            ))}
+        </Box>
+      ) : null}
+
+      {/* Retry history */}
+      {feature.retryHistory.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="red">
+            Retry history ({feature.retryHistory.length} previous attempt{feature.retryHistory.length > 1 ? 's' : ''}):
+          </Text>
+          {feature.retryHistory.map((prev, i) => {
+            const prevCoderMs = prev.coderSessions.reduce((sum, s) => sum + (s.durationMs ?? 0), 0)
+            return (
+              <Box key={i} paddingLeft={2}>
+                <Text color="gray">
+                  attempt {i + 1}: {prev.verdict ?? 'in-progress'}  coder:{fmtMs(prevCoderMs || undefined)}
+                  {prev.evalSession ? `  eval:${fmtMs(prev.evalSession.durationMs)}` : ''}
+                </Text>
+              </Box>
+            )
+          })}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+function CostPanel({ state }: { state: MonitorState }) {
+  const costSummary = computeRunCost(state.allEvents)
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginTop={1}>
+      <Box justifyContent="space-between">
+        <Text bold color="yellow">Cumulative Cost Breakdown</Text>
+        <Text color="gray">  [esc] or [c] close</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text bold color="white">Total: </Text>
+        <Text color="yellow">{fmtUsd(costSummary.totalCostUsd)}</Text>
+      </Box>
+      {costSummary.byAgent.map((a, i) => (
+        <Box key={i} paddingLeft={2}>
+          <Text color="cyan">{a.agent.padEnd(10)}</Text>
+          <Text color="gray">
+            {fmtUsd(a.estimatedUsd)}  in:{fmtTokens(a.inputTokens)}  out:{fmtTokens(a.outputTokens)}  cache:{fmtTokens(a.cacheReadTokens)}
+          </Text>
+        </Box>
+      ))}
+      {costSummary.byAgent.length === 0 ? (
+        <Text color="gray" paddingLeft={2}>No agent runs recorded yet.</Text>
       ) : null}
     </Box>
   )
@@ -220,6 +320,9 @@ export function App({ projectDir }: { projectDir: string }) {
   const [offset, setOffset] = useState(0)
   const [scrollIndex, setScrollIndex] = useState(0)
   const [detailFeatureId, setDetailFeatureId] = useState<string | null>(null)
+  const [showCost, setShowCost] = useState(false)
+  const [filterFailing, setFilterFailing] = useState(false)
+  const [sortByPriority, setSortByPriority] = useState(false)
 
   // Poll for new events
   useEffect(() => {
@@ -240,20 +343,52 @@ export function App({ projectDir }: { projectDir: string }) {
     return () => clearInterval(timer)
   }, [projectDir])
 
-  const visibleFeatures = state.features
+  // Build the visible feature list with optional filter and sort
+  const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 }
+  let visibleFeatures = filterFailing
+    ? state.features.filter(f => f.verdict === 'fail' || (f.verdict === undefined && f.coderSessions.length > 0))
+    : state.features
+
+  if (sortByPriority) {
+    visibleFeatures = [...visibleFeatures].sort(
+      (a, b) => (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1)
+    )
+  }
 
   useInput((input, key) => {
     if (input === 'q') { exit(); return }
 
+    // In detail panel: esc closes it
     if (detailFeatureId) {
-      if (key.escape || input === 'q') setDetailFeatureId(null)
+      if (key.escape) { setDetailFeatureId(null); return }
       return
     }
 
-    if (key.upArrow) setScrollIndex(i => Math.max(0, i - 1))
-    if (key.downArrow) setScrollIndex(i => Math.min(visibleFeatures.length - 1, i + 1))
+    // In cost panel: esc or c closes it
+    if (showCost) {
+      if (key.escape || input === 'c') { setShowCost(false); return }
+      return
+    }
+
+    if (key.upArrow) { setScrollIndex(i => Math.max(0, i - 1)); return }
+    if (key.downArrow) { setScrollIndex(i => Math.min(visibleFeatures.length - 1, i + 1)); return }
     if (key.return && visibleFeatures[scrollIndex]) {
       setDetailFeatureId(visibleFeatures[scrollIndex]!.featureId)
+      return
+    }
+    // 'c' opens cost breakdown
+    if (input === 'c') { setShowCost(true); return }
+    // 'f' toggles failing filter
+    if (input === 'f') {
+      setFilterFailing(v => !v)
+      setScrollIndex(0)
+      return
+    }
+    // 'r' toggles priority sort
+    if (input === 'r') {
+      setSortByPriority(v => !v)
+      setScrollIndex(0)
+      return
     }
   })
 
@@ -267,18 +402,22 @@ export function App({ projectDir }: { projectDir: string }) {
 
   return (
     <Box flexDirection="column">
-      <Header state={state} />
+      <Header state={state} filterFailing={filterFailing} sortByPriority={sortByPriority} />
       <ActivePanel state={state} />
 
       {selectedFeature ? (
-        <DetailPanel feature={selectedFeature} onBack={() => setDetailFeatureId(null)} />
+        <DetailPanel feature={selectedFeature} />
+      ) : showCost ? (
+        <CostPanel state={state} />
       ) : (
         <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginTop={1}>
           <Text color="gray">
-            HISTORY  {visibleFeatures.length} features
+            HISTORY  {visibleFeatures.length} feature{visibleFeatures.length !== 1 ? 's' : ''}
+            {filterFailing ? ' (failing only)' : ''}
+            {sortByPriority ? ' [priority order]' : ''}
             {visibleFeatures.length === 0 ? '  (waiting for quest run…)' : ''}
           </Text>
-          {visibleSlice.map((f, i) => (
+          {visibleSlice.map((f) => (
             <FeatureRow
               key={f.featureId}
               feature={f}
