@@ -89,6 +89,28 @@ export interface RunCostSummary {
 }
 
 /**
+ * Compute total estimated USD cost for a specific feature from all events.
+ * Filters agent_done events by featureId and sums costs.
+ */
+export function computeFeatureCost(
+  events: QuestEvent[],
+  featureId: string,
+  model = 'claude-sonnet-4-6',
+  pricingTable: Record<string, ModelPricing> = DEFAULT_MODEL_PRICING,
+): number {
+  let totalCost = 0
+  for (const event of events) {
+    if (event.type !== 'agent_done') continue
+    if (event.featureId !== featureId) continue
+    const { inputTokens = 0, outputTokens = 0, cacheReadTokens = 0 } = event
+    const eventModel = (event as { model?: string }).model ?? model
+    const tokens: TokenCounts = { inputTokens, outputTokens, cacheReadTokens }
+    totalCost += calculateCost(tokens, eventModel, pricingTable)
+  }
+  return totalCost
+}
+
+/**
  * Compute cost summary from a list of quest events.
  * Uses agent_done events to aggregate token counts per agent type.
  * If agent_done events include a `model` field, that model's pricing is used.
@@ -138,3 +160,4 @@ export function computeRunCost(
 
   return { totalCostUsd, byAgent: breakdowns }
 }
+
