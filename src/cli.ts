@@ -200,8 +200,16 @@ program
   .option('--evaluator-model <model>', 'Model to use for the evaluator agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
   .option('--webhook <url>', 'Send POST notifications on feature_done and run_complete events to this URL')
   .option('--notify <channel>', 'Send formatted notifications to a channel (currently: slack). Slack URL read from QUEST_SLACK_WEBHOOK env var')
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string }) => {
+  .option('--ci', 'CI mode: no progress bars, structured JSON to stdout, exit code reflects outcome (0=all pass, 1=any fail, 2=error)', false)
+  .option('--fail-fast', 'Stop on first feature failure instead of continuing', false)
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string; ci: boolean; failFast: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    // Apply environment variable overrides for CI usage
+    if (process.env.QUEST_API_KEY) {
+      process.env.ANTHROPIC_API_KEY = process.env.QUEST_API_KEY
+    }
+    const envModel = process.env.QUEST_MODEL
 
     // Validate models if provided
     const { SUPPORTED_MODELS } = await import('./agents/types.js')
@@ -244,13 +252,48 @@ program
       evaluatorModel: opts.evaluatorModel,
       webhookUrl: opts.webhook,
       notify: opts.notify,
+      ciMode: opts.ci,
+      failFast: opts.failFast,
+      ...(envModel ? { model: envModel } : {}),
     })
 
     try {
       await orch.run()
     } catch (err) {
-      console.error(chalk.red('Run failed:'), err instanceof Error ? err.message : err)
-      process.exit(1)
+      if (opts.ci) {
+        process.stderr.write(`quest run error: ${err instanceof Error ? err.message : err}\n`)
+      } else {
+        console.error(chalk.red('Run failed:'), err instanceof Error ? err.message : err)
+      }
+      process.exit(2)
+    }
+
+    if (opts.ci) {
+      // In CI mode: determine exit code from run outcome
+      const { readFeaturesFile: readFeatures } = await import('./state/features.js')
+      const featuresData = await readFeatures(projectDir).catch(() => null)
+      const anyFailed = featuresData
+        ? featuresData.features.some(f => !f.passes)
+        : false
+
+      // Write GitHub Actions job summary if GITHUB_STEP_SUMMARY is set
+      const summaryFile = process.env.GITHUB_STEP_SUMMARY
+      if (summaryFile) {
+        try {
+          const { generateReport } = await import('./report.js')
+          const { readFileSync: readFile } = await import('node:fs')
+          const { appendFileSync } = await import('node:fs')
+          // Generate markdown report and append to job summary
+          const reportPath = generateReport(projectDir, 'markdown')
+          const reportContent = readFile(reportPath, 'utf-8')
+          appendFileSync(summaryFile, reportContent, 'utf-8')
+        } catch {
+          // Best-effort: don't fail the run if summary writing fails
+        }
+      }
+
+      // Exit code: 0 = all pass, 1 = any fail
+      process.exit(anyFailed ? 1 : 0)
     }
   })
 

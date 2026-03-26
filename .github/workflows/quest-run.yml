@@ -1,0 +1,68 @@
+name: Quest Feature Implementation
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_dir:
+        description: 'Project directory (relative to repo root)'
+        required: false
+        default: '.'
+      max_features:
+        description: 'Maximum number of features to implement (blank = all)'
+        required: false
+        default: ''
+      fail_fast:
+        description: 'Stop on first feature failure'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - 'features.json'
+
+jobs:
+  quest-run:
+    name: Implement Features
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Quest
+        run: npm install -g @anthropic/quest
+
+      - name: Run Quest (CI mode)
+        env:
+          QUEST_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          QUEST_MODEL: ${{ vars.QUEST_MODEL || 'claude-sonnet-4-6' }}
+        run: |
+          ARGS="--ci --skip-init"
+          if [ "${{ inputs.fail_fast }}" = "true" ]; then
+            ARGS="$ARGS --fail-fast"
+          fi
+          if [ -n "${{ inputs.max_features }}" ]; then
+            ARGS="$ARGS --max-features ${{ inputs.max_features }}"
+          fi
+          quest run ${{ inputs.project_dir || '.' }} $ARGS
+
+      - name: Upload Quest events log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quest-events
+          path: |
+            quest-events.jsonl
+            .quest/reports/
+          retention-days: 30

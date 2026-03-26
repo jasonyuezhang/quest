@@ -131,6 +131,8 @@ export class Orchestrator {
       skipRegression: false,
       noTranscripts: false,
       tdd: false,
+      ciMode: false,
+      failFast: false,
       ...opts,
       // Re-apply resolved models after spread so explicit opts don't overwrite file config fallback
       coderModel: resolvedCoderModel,
@@ -152,6 +154,29 @@ export class Orchestrator {
       return parsed.models ?? {}
     } catch {
       return {}
+    }
+  }
+
+  /**
+   * Emit a structured JSON line to stdout (CI mode only).
+   * In CI mode, structured output goes to stdout while human-readable chalk
+   * messages are redirected to stderr so they don't pollute the JSON stream.
+   */
+  private ciLog(data: Record<string, unknown>): void {
+    if (this.opts.ciMode) {
+      process.stdout.write(JSON.stringify({ ...data, ts: new Date().toISOString() }) + '\n')
+    }
+  }
+
+  /**
+   * Write a human-readable message. In CI mode, sends to stderr to keep
+   * stdout clean for structured JSON output.
+   */
+  private log(msg: string): void {
+    if (this.opts.ciMode) {
+      process.stderr.write(msg.replace(/\n$/, '') + '\n')
+    } else {
+      console.log(msg)
     }
   }
 
@@ -414,12 +439,13 @@ export class Orchestrator {
         const next = getNextFeature(featuresData.features)
 
         if (!next) {
-          console.log(chalk.green('\n✅ All features implemented!'))
+          this.log(chalk.green('\n✅ All features implemented!'))
           const total = featuresData.features.length
           const costSummary = computeRunCost(readEvents(projectDir))
           const runDoneMs = Date.now() - runStart
           const runPassing = countPassing(featuresData.features)
           emit({ type: 'run_complete', passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+          this.ciLog({ event: 'run_complete', passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd })
           await this.pluginManager.onRunComplete({ projectDir, passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd })
           {
             const runCompletePayload: RunCompletePayload = {
@@ -438,16 +464,17 @@ export class Orchestrator {
         const total = featuresData.features.length
         const passing = countPassing(featuresData.features)
         const pct = Math.round((passing / total) * 100)
-        console.log(
+        this.log(
           chalk.bold(`\n◆ Feature ${passing + 1}/${total} (${pct}% done) — ${chalk.white(next.id)}`) +
             chalk.gray(` [${next.priority}]`),
         )
-        console.log(chalk.gray(`  ${next.description}`))
+        this.log(chalk.gray(`  ${next.description}`))
         emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
+        this.ciLog({ event: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
         await this.pluginManager.onFeatureStart({ projectDir, feature: next, index: passing + 1, total })
 
         if (dryRun) {
-          console.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
+          this.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
           implemented++
           continue
         }
@@ -464,13 +491,14 @@ export class Orchestrator {
 
         if (verdict === 'pass') {
           implemented++
-          console.log(chalk.green(`\n✓ ${next.id} passed`))
+          this.log(chalk.green(`\n✓ ${next.id} passed`))
         } else {
           failed++
-          console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
+          this.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
           await this.markFeatureSkipped(next)
         }
         emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: featureDurationMs, failureCategory })
+        this.ciLog({ event: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: featureDurationMs, failureCategory })
         await this.pluginManager.onFeatureDone({ projectDir, featureId: next.id, featureName: next.name, verdict, attempt: this.opts.retryLimit + 1, durationMs: featureDurationMs, failureCategory })
         {
           const featureCost = computeFeatureCost(readEvents(projectDir), next.id)
@@ -484,10 +512,16 @@ export class Orchestrator {
           }
           await notifyFeatureDone(featureDonePayload, this.opts.webhookUrl, this.opts.notify)
         }
+
+        // fail-fast: stop on first failure
+        if (verdict === 'fail' && this.opts.failFast) {
+          this.log(chalk.yellow('\n⚠ fail-fast: stopping after first failure'))
+          break
+        }
       }
 
       const summary = await this.getStatus()
-      console.log(
+      this.log(
         chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing`),
       )
     } finally {
@@ -526,8 +560,8 @@ export class Orchestrator {
     }
 
     const effectiveWorkers = Math.min(dag.maxParallelism, maxConcurrency)
-    console.log(chalk.bold(`\n⚡ DAG scheduler: up to ${effectiveWorkers} workers`))
-    console.log(chalk.gray(formatDAGSummary(dag, maxConcurrency)))
+    this.log(chalk.bold(`\n⚡ DAG scheduler: up to ${effectiveWorkers} workers`))
+    this.log(chalk.gray(formatDAGSummary(dag, maxConcurrency)))
 
     emit({
       type: 'dag_built',
@@ -539,10 +573,11 @@ export class Orchestrator {
 
     const pending = allFeatures.filter(f => !f.passes)
     if (pending.length === 0) {
-      console.log(chalk.green('\n✅ All features already implemented!'))
+      this.log(chalk.green('\n✅ All features already implemented!'))
       const earlyExitCost = computeRunCost(readEvents(projectDir))
       const earlyPassing = countPassing(featuresData.features)
       emit({ type: 'run_complete', passing: earlyPassing, total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd, costByAgent: earlyExitCost.byAgent })
+      this.ciLog({ event: 'run_complete', passing: earlyPassing, total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd })
       await notifyRunComplete({
         event: 'run_complete',
         passing: earlyPassing,
@@ -554,7 +589,7 @@ export class Orchestrator {
       return
     }
 
-    console.log(chalk.gray(`  ${pending.length} features pending, ${total} total`))
+    this.log(chalk.gray(`  ${pending.length} features pending, ${total} total`))
     emit({
       type: 'run_start',
       projectName: featuresData.projectName,
@@ -569,9 +604,9 @@ export class Orchestrator {
 
     if (dryRun) {
       const estimate = estimateTotalTime(dag, maxConcurrency)
-      console.log(chalk.gray(`\n[dry-run] Estimated wall-clock: ${(estimate.estimatedMs / 60_000).toFixed(0)} min`))
-      console.log(chalk.gray(`  Critical path: ${(estimate.criticalPathMs / 60_000).toFixed(0)} min`))
-      console.log(chalk.gray(`  Parallel efficiency: ${(estimate.parallelEfficiency * 100).toFixed(0)}%`))
+      this.log(chalk.gray(`\n[dry-run] Estimated wall-clock: ${(estimate.estimatedMs / 60_000).toFixed(0)} min`))
+      this.log(chalk.gray(`  Critical path: ${(estimate.criticalPathMs / 60_000).toFixed(0)} min`))
+      this.log(chalk.gray(`  Parallel efficiency: ${(estimate.parallelEfficiency * 100).toFixed(0)}%`))
       return
     }
 
@@ -604,7 +639,7 @@ export class Orchestrator {
             inFlight: inFlight.size,
             reason: batch.reason,
           })
-          console.log(chalk.gray(`\n  scheduler: ${batch.reason}`))
+          this.log(chalk.gray(`\n  scheduler: ${batch.reason}`))
         }
 
         // Dispatch new features — skip if shutdown was requested
@@ -622,7 +657,8 @@ export class Orchestrator {
               total,
               workerId: worktree.workerId,
             })
-            console.log(chalk.bold(`  [W${worktree.workerId}] ${feature.id}`) + chalk.gray(` — ${feature.description.slice(0, 60)}`))
+            this.ciLog({ event: 'feature_start', featureId: feature.id, featureName: feature.name, priority: feature.priority, workerId: worktree.workerId })
+            this.log(chalk.bold(`  [W${worktree.workerId}] ${feature.id}`) + chalk.gray(` — ${feature.description.slice(0, 60)}`))
 
             // Launch worker — wrap result with featureId for identification
             const featureId = feature.id
@@ -660,13 +696,13 @@ export class Orchestrator {
             } catch {
               // Best-effort
             }
-            console.log(chalk.yellow('\n⚠ Parallel run interrupted. Run `quest resume` to continue.'))
+            this.log(chalk.yellow('\n⚠ Parallel run interrupted. Run `quest resume` to continue.'))
             break
           }
           // Check if there are features that can never be reached (failed dependencies)
           const remaining = allFeatures.filter(f => !f.passes && !completed.has(f.id))
           if (remaining.length > 0 && retryQueue.length === 0) {
-            console.log(chalk.yellow(`\n⚠ ${remaining.length} features blocked by failed dependencies`))
+            this.log(chalk.yellow(`\n⚠ ${remaining.length} features blocked by failed dependencies`))
           }
           break
         }
@@ -685,26 +721,27 @@ export class Orchestrator {
           if (picked) {
             implemented++
             completed.add(featureId)
-            console.log(chalk.green(`\n✓ [W${wr.workerId}] ${featureId} passed (${(wr.durationMs / 1000).toFixed(0)}s)`))
+            this.log(chalk.green(`\n✓ [W${wr.workerId}] ${featureId} passed (${(wr.durationMs / 1000).toFixed(0)}s)`))
 
             // Check for newly unblocked features
             const unblocked = getNewlyUnblocked(dag, featureId, completed, new Set(inFlight.keys()))
             for (const uid of unblocked) {
               emit({ type: 'feature_unblocked', featureId: uid, unblockedBy: featureId })
-              console.log(chalk.blue(`  ↳ unblocked: ${uid}`))
+              this.log(chalk.blue(`  ↳ unblocked: ${uid}`))
             }
           } else {
             // Cherry-pick conflict — queue for sequential retry
-            console.log(chalk.yellow(`\n⚠ [W${wr.workerId}] ${featureId} passed but cherry-pick conflicted — queued for retry`))
+            this.log(chalk.yellow(`\n⚠ [W${wr.workerId}] ${featureId} passed but cherry-pick conflicted — queued for retry`))
             retryQueue.push(wr.feature)
           }
         } else {
           failed++
           completed.add(featureId) // mark as completed (failed) so we don't re-dispatch
-          console.log(chalk.red(`\n✗ [W${wr.workerId}] ${featureId} failed${wr.error ? `: ${wr.error}` : ''}`))
+          this.log(chalk.red(`\n✗ [W${wr.workerId}] ${featureId} failed${wr.error ? `: ${wr.error}` : ''}`))
         }
 
         emit({ type: 'feature_done', featureId, verdict: wr.verdict, attempt: 1, durationMs: wr.durationMs, failureCategory: wr.failureCategory, workerId: wr.workerId })
+        this.ciLog({ event: 'feature_done', featureId, verdict: wr.verdict, attempt: 1, durationMs: wr.durationMs, failureCategory: wr.failureCategory, workerId: wr.workerId })
         {
           const featureCost = computeFeatureCost(readEvents(projectDir), featureId)
           const fdPayload: FeatureDonePayload = {
@@ -718,13 +755,20 @@ export class Orchestrator {
           await notifyFeatureDone(fdPayload, this.opts.webhookUrl, this.opts.notify)
         }
 
+        // fail-fast: stop on first failure
+        if (wr.verdict === 'fail' && this.opts.failFast) {
+          this.log(chalk.yellow('\n⚠ fail-fast: stopping after first failure'))
+          // Cancel in-flight by requesting shutdown
+          this.shutdownRequested = true
+        }
+
         // Release worktree back to pool
         workerPool.release(worktree)
       }
 
       // Process retry queue sequentially in main worktree
       for (const feature of retryQueue) {
-        console.log(chalk.yellow(`\n↻ Sequential retry: ${feature.id}`))
+        this.log(chalk.yellow(`\n↻ Sequential retry: ${feature.id}`))
         const { verdict, failureCategory } = await this.implementFeature(feature)
         if (verdict === 'pass') {
           implemented++
@@ -748,7 +792,7 @@ export class Orchestrator {
       }
     } finally {
       // Always clean up worktrees
-      console.log(chalk.gray('\n  Cleaning up worktrees...'))
+      this.log(chalk.gray('\n  Cleaning up worktrees...'))
       // Clean up any in-flight worktrees that weren't released
       for (const [, wt] of worktreeMap) {
         workerPool.release(wt)
@@ -758,12 +802,13 @@ export class Orchestrator {
 
     const summary = await this.getStatus()
     const elapsed = ((Date.now() - runStart) / 1000).toFixed(0)
-    console.log(
+    this.log(
       chalk.bold(`\nSummary: ${summary.passing}/${summary.total} features passing (${elapsed}s)`),
     )
     const costSummary = computeRunCost(readEvents(projectDir))
     const dagRunDoneMs = Date.now() - runStart
     emit({ type: 'run_complete', passing: summary.passing, total: summary.total, durationMs: dagRunDoneMs, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+    this.ciLog({ event: 'run_complete', passing: summary.passing, total: summary.total, durationMs: dagRunDoneMs, totalCostUsd: costSummary.totalCostUsd })
     await notifyRunComplete({
       event: 'run_complete',
       passing: summary.passing,

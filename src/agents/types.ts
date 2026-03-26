@@ -257,4 +257,8 @@ export interface OrchestratorOptions {
   webhookUrl?: string
   /** Notification channel — currently only 'slack' is supported */
   notify?: string
+  /** CI mode: suppress progress bars, emit structured JSON to stdout, set exit codes (default: false) */
+  ciMode?: boolean
+  /** Fail-fast: stop on first feature failure instead of continuing (default: false) */
+  failFast?: boolean
 }
