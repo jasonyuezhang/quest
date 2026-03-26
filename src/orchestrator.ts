@@ -1,10 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import chalk from 'chalk'
 
-import type { Feature, OrchestratorOptions, ProgressState, WorkerResult } from './agents/types.js'
+import type { Feature, OrchestratorOptions, ProgressState, WorkerResult, ModelConfig } from './agents/types.js'
 import type { ProjectPlan } from './planner.js'
 import { runInitializerAgent } from './agents/initializer.js'
 import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
@@ -46,6 +46,7 @@ import {
 } from './scheduler.js'
 import { Tracer } from './trace.js'
 import { AgentGit } from './agent-git/index.js'
+import { TranscriptCapture } from './transcript.js'
 
 const execAsync = promisify(exec)
 
@@ -96,7 +97,7 @@ class WorkerPool {
 // ---------------------------------------------------------------------------
 
 export class Orchestrator {
-  private opts: Required<OrchestratorOptions>
+  private opts: Required<Omit<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd'>> & Pick<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd'>
   private tracer: Tracer
   private agentGit: AgentGit
 
@@ -105,21 +106,48 @@ export class Orchestrator {
   private shutdownListeners: Array<() => void> = []
 
   constructor(opts: OrchestratorOptions) {
+    // Load model config from .quest/config.json if it exists
+    const fileConfig = Orchestrator.loadModelConfig(opts.projectDir)
+    const defaultModel = opts.model ?? 'claude-sonnet-4-6'
+
     this.opts = {
       maxFeatures: Infinity,
       retryLimit: 2,
       maxContextResets: 5,
       dryRun: false,
-      model: 'claude-sonnet-4-6',
+      model: defaultModel,
+      coderModel: opts.coderModel ?? fileConfig.coder ?? defaultModel,
+      evaluatorModel: opts.evaluatorModel ?? fileConfig.evaluator ?? defaultModel,
+      reviewerModel: opts.reviewerModel ?? fileConfig.reviewer ?? defaultModel,
       maxConcurrency: 4,
       review: false,
       maxContextTokens: 200_000,
       skipInit: false,
       healthTimeout: 30,
+      skipRegression: false,
+      noTranscripts: false,
+      tdd: false,
       ...opts,
+      // Re-apply resolved models after spread so explicit opts don't overwrite file config fallback
+      coderModel: opts.coderModel ?? fileConfig.coder ?? defaultModel,
+      evaluatorModel: opts.evaluatorModel ?? fileConfig.evaluator ?? defaultModel,
+      reviewerModel: opts.reviewerModel ?? fileConfig.reviewer ?? defaultModel,
     }
     this.tracer = new Tracer(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
+  }
+
+  /** Load model config from .quest/config.json */
+  private static loadModelConfig(projectDir: string): ModelConfig {
+    const configPath = join(projectDir, '.quest', 'config.json')
+    if (!existsSync(configPath)) return {}
+    try {
+      const raw = readFileSync(configPath, 'utf-8')
+      const parsed = JSON.parse(raw) as { models?: ModelConfig }
+      return parsed.models ?? {}
+    } catch {
+      return {}
+    }
   }
 
   /**
@@ -335,6 +363,11 @@ export class Orchestrator {
     const { projectDir, maxFeatures, dryRun, maxConcurrency } = this.opts
     const runStart = Date.now()
 
+    // Clean up old transcripts (older than 7 days) on each run
+    if (!this.opts.noTranscripts) {
+      TranscriptCapture.cleanup(projectDir)
+    }
+
     initEventLog(projectDir)
     await this.runInitSh()
     await this.agentGit.init()
@@ -467,7 +500,17 @@ export class Orchestrator {
     }
 
     console.log(chalk.gray(`  ${pending.length} features pending, ${total} total`))
-    emit({ type: 'run_start', projectName: featuresData.projectName, total, concurrency: effectiveWorkers })
+    emit({
+      type: 'run_start',
+      projectName: featuresData.projectName,
+      total,
+      concurrency: effectiveWorkers,
+      models: {
+        coder: this.opts.coderModel ?? this.opts.model,
+        evaluator: this.opts.evaluatorModel ?? this.opts.model,
+        reviewer: this.opts.reviewerModel ?? this.opts.model,
+      },
+    })
 
     if (dryRun) {
       const estimate = estimateTotalTime(dag, maxConcurrency)
@@ -661,7 +704,11 @@ export class Orchestrator {
 
     // Clean and write sprint artifacts in the worktree
     await cleanSprintArtifacts(worktreeDir)
-    const contract = buildSprintContract(feature)
+    const worktreeFeaturesData = await readFeaturesFile(this.opts.projectDir)
+    const worktreePreviouslyPassingIds = worktreeFeaturesData.features
+      .filter(f => f.passes && f.id !== feature.id)
+      .map(f => f.id)
+    const contract = buildSprintContract(feature, worktreePreviouslyPassingIds, this.opts.skipRegression, this.opts.tdd)
     await Promise.all([
       writeSprintContract(worktreeDir, contract),
       writeCurrentFeature(worktreeDir, feature),
@@ -682,11 +729,13 @@ export class Orchestrator {
       printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}`, wId)
       const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
       ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
+      const coderModel = this.opts.coderModel ?? this.opts.model
+      const evaluatorModel = this.opts.evaluatorModel ?? this.opts.model
       const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${attemptLabel}`, {
-        featureId: feature.id, workerId: wId, model: 'claude-sonnet-4-6',
+        featureId: feature.id, workerId: wId, model: coderModel,
       })
       try {
-        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined)
+        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: coderModel })
       } catch (err) {
         this.tracer.endSession(coderTrace)
         if (!(err instanceof ContextResetNeededError)) {
@@ -703,9 +752,9 @@ export class Orchestrator {
       printAgentBanner('eval', 2, 2, feature.id, wId)
       const evalCtx = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
       const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
-        featureId: feature.id, workerId: wId, model: 'claude-sonnet-4-6',
+        featureId: feature.id, workerId: wId, model: evaluatorModel,
       })
-      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace)
+      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace, { noTranscripts: this.opts.noTranscripts, model: evaluatorModel })
       this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
@@ -716,6 +765,16 @@ export class Orchestrator {
       const report = await readEvalReport(worktreeDir)
       if (!report) {
         console.log(chalk.red(`  [W${wId}] ✗ No eval-report.json`))
+        continue
+      }
+
+      // Check for regressions — even if verdict is "pass", regressions are a blocker
+      if (report.regressions && report.regressions.length > 0) {
+        console.log(chalk.red(`  [W${wId}] ✗ Regressions in ${report.regressions.length} previously passing feature(s):`))
+        for (const reg of report.regressions) {
+          console.log(chalk.red(`    [W${wId}] ✗ [regression] ${reg.featureId}: ${reg.evidence}`))
+        }
+        lastWorktreeFailureCategory = 'logic_bug'
         continue
       }
 
@@ -797,7 +856,11 @@ export class Orchestrator {
     await cleanSprintArtifacts(projectDir)
 
     // Write sprint contract BEFORE coder runs — criteria are locked
-    const contract = buildSprintContract(feature)
+    const featuresDataForContract = await readFeaturesFile(projectDir)
+    const previouslyPassingIds = featuresDataForContract.features
+      .filter(f => f.passes && f.id !== feature.id)
+      .map(f => f.id)
+    const contract = buildSprintContract(feature, previouslyPassingIds, this.opts.skipRegression, this.opts.tdd)
     await Promise.all([
       writeSprintContract(projectDir, contract),
       // Write current-feature.json so coder reads one feature, not all 200+
@@ -940,7 +1003,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
       const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
         featureId: feature.id, model: 'claude-sonnet-4-6',
       })
-      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace)
+      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts })
       this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
@@ -962,6 +1025,16 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         ),
       )
       emit({ type: 'eval_verdict', featureId: feature.id, verdict: report.verdict, criteriaResults: report.criteriaResults })
+
+      // Check for regressions — even if verdict is "pass", regressions are a blocker
+      if (report.regressions && report.regressions.length > 0) {
+        console.log(chalk.red(`✗ Regressions in ${report.regressions.length} previously passing feature(s):`))
+        for (const reg of report.regressions) {
+          console.log(chalk.red(`    ✗ [regression] ${reg.featureId}: ${reg.evidence}`))
+        }
+        lastFailureCategory = 'logic_bug'
+        continue
+      }
 
       if (report.verdict === 'fail') {
         // Classify the failure and write it back to eval-report
@@ -1075,7 +1148,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
           featureId: feature.id, model: 'claude-sonnet-4-6',
         })
-        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt)
+        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd })
         this.tracer.endSession(coderTrace)
 
         const stats = ctxMgr.getStats()

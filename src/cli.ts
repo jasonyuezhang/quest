@@ -192,8 +192,26 @@ program
   .option('--review', 'Run code review between coder and evaluator (checks security, error handling, duplication, naming, style)', false)
   .option('--skip-init', 'Skip running init.sh (for environments where setup is manual)', false)
   .option('--health-timeout <seconds>', 'Timeout in seconds for health check polling after init.sh (default: 30)', (v) => parseInt(v, 10), 30)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number }) => {
+  .option('--no-transcripts', 'Disable session transcript capture to save disk space', false)
+  .option('--skip-regression', 'Skip regression checks in evaluator for speed during development', false)
+  .option('--tdd', 'Enable Test-Driven Development mode: coder writes failing tests first, then implements (red-green-refactor)', false)
+  .option('--coder-model <model>', 'Model to use for the coder agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
+  .option('--evaluator-model <model>', 'Model to use for the evaluator agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; coderModel?: string; evaluatorModel?: string }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    // Validate models if provided
+    const { SUPPORTED_MODELS } = await import('./agents/types.js')
+    if (opts.coderModel && !SUPPORTED_MODELS.includes(opts.coderModel as typeof SUPPORTED_MODELS[number])) {
+      console.error(chalk.red(`Unsupported coder model: ${opts.coderModel}`))
+      console.error(chalk.gray(`Supported models: ${SUPPORTED_MODELS.join(', ')}`))
+      process.exit(1)
+    }
+    if (opts.evaluatorModel && !SUPPORTED_MODELS.includes(opts.evaluatorModel as typeof SUPPORTED_MODELS[number])) {
+      console.error(chalk.red(`Unsupported evaluator model: ${opts.evaluatorModel}`))
+      console.error(chalk.gray(`Supported models: ${SUPPORTED_MODELS.join(', ')}`))
+      process.exit(1)
+    }
 
     // Auto-init if project has no features.json
     const state = await detectProjectState(projectDir)
@@ -215,6 +233,11 @@ program
       review: opts.review,
       skipInit: opts.skipInit,
       healthTimeout: opts.healthTimeout,
+      noTranscripts: opts.noTranscripts,
+      skipRegression: opts.skipRegression,
+      tdd: opts.tdd,
+      coderModel: opts.coderModel,
+      evaluatorModel: opts.evaluatorModel,
     })
 
     try {
@@ -258,10 +281,48 @@ program
   .option('--show-all', 'Show all features, not just pending', false)
   .option('--failures', 'Show a summary table of failures grouped by category', false)
   .option('--cost', 'Show total estimated API cost for the run, broken down by agent type', false)
-  .action(async (projectDirArg: string | undefined, opts: { showAll: boolean; failures: boolean; cost: boolean }) => {
+  .option('--config', 'Show active model configuration for each agent', false)
+  .action(async (projectDirArg: string | undefined, opts: { showAll: boolean; failures: boolean; cost: boolean; config: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     try {
+      if (opts.config) {
+        // Show active model configuration from .quest/config.json + defaults
+        const { join } = await import('node:path')
+        const configPath = join(projectDir, '.quest', 'config.json')
+        let fileConfig: { models?: { coder?: string; evaluator?: string; reviewer?: string; planner?: string } } = {}
+        if (existsSync(configPath)) {
+          try {
+            fileConfig = JSON.parse(readFileSync(configPath, 'utf-8'))
+          } catch {
+            fileConfig = {}
+          }
+        }
+        const models = fileConfig.models ?? {}
+        const defaultModel = 'claude-sonnet-4-6'
+
+        console.log(chalk.bold('\nActive Model Configuration\n'))
+        const agents = [
+          { name: 'coder', model: models.coder ?? defaultModel, source: models.coder ? 'config' : 'default' },
+          { name: 'evaluator', model: models.evaluator ?? defaultModel, source: models.evaluator ? 'config' : 'default' },
+          { name: 'reviewer', model: models.reviewer ?? defaultModel, source: models.reviewer ? 'config' : 'default' },
+          { name: 'planner', model: models.planner ?? defaultModel, source: models.planner ? 'config' : 'default' },
+        ]
+        for (const a of agents) {
+          const sourceTag = a.source === 'config' ? chalk.green(' (from .quest/config.json)') : chalk.gray(' (default)')
+          console.log(`  ${chalk.cyan(a.name.padEnd(10))} ${a.model}${sourceTag}`)
+        }
+        if (existsSync(configPath)) {
+          console.log(chalk.gray(`\n  Config file: ${configPath}`))
+        } else {
+          console.log(chalk.gray(`\n  No .quest/config.json found — using defaults`))
+          console.log(chalk.gray(`  Create ${join(projectDir, '.quest', 'config.json')} to customize models:`))
+          console.log(chalk.gray('  { "models": { "coder": "claude-opus-4-6", "evaluator": "claude-haiku-4-5" } }'))
+        }
+        console.log()
+        return
+      }
+
       if (opts.cost) {
         // Show cost breakdown from quest-events.jsonl
         const costEvents = readEvents(projectDir)
@@ -565,24 +626,47 @@ program
   })
 
 /**
- * quest inspect <session-id> [project-dir]
+ * quest inspect <feature-id|session-id> [project-dir]
  *
- * Show the full LLM trace for a session — every turn, tool call, and response.
+ * Show the latest transcript for a feature, or the full LLM trace for a session.
+ *
+ * If the argument matches a feature ID (transcript found), the transcript is shown.
+ * Otherwise falls back to LLM trace lookup by session ID.
  */
 program
-  .command('inspect <session-id> [project-dir]')
-  .description('Show full LLM trace for a session (all turns, tool calls, responses)')
-  .action(async (sessionId: string, projectDirArg: string | undefined) => {
+  .command('inspect <feature-id> [project-dir]')
+  .description('Show latest transcript for a feature, or full LLM trace for a session ID')
+  .action(async (featureIdOrSessionId: string, projectDirArg: string | undefined) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { TranscriptCapture, formatTranscript } = await import('./transcript.js')
+
+    // Try to find a transcript for this feature ID first
+    const transcriptPath = TranscriptCapture.findLatest(projectDir, featureIdOrSessionId)
+    if (transcriptPath) {
+      // Extract agent name from filename: <featureId>-<agent>-<timestamp>.jsonl
+      const filename = transcriptPath.split('/').pop() ?? ''
+      const parts = filename.replace('.jsonl', '').split('-')
+      // feature-id may have dashes, so agent is the second-to-last part before timestamp
+      // filename format: <featureId>-<agent>-<YYYY>-<MM>-...
+      // Find agent by matching known agent labels
+      const agentLabels = ['coder', 'eval', 'planner', 'init', 'reviewer']
+      const agentPart = parts.find(p => agentLabels.includes(p)) ?? 'unknown'
+
+      console.log('\n' + formatTranscript(transcriptPath, featureIdOrSessionId, agentPart) + '\n')
+      return
+    }
+
+    // Fall back to LLM trace lookup
     const { Tracer, formatSessionTrace } = await import('./trace.js')
     const tracer = new Tracer(projectDir)
 
     // Allow partial session ID match
     const index = tracer.readIndex()
-    const match = index.find(s => s.sessionId === sessionId || s.sessionId.startsWith(sessionId))
+    const match = index.find(s => s.sessionId === featureIdOrSessionId || s.sessionId.startsWith(featureIdOrSessionId))
     if (!match) {
-      console.error(chalk.red(`Session not found: ${sessionId}`))
-      console.error(chalk.gray('Run quest traces to see available sessions.'))
+      console.error(chalk.red(`No transcript or session found for: ${featureIdOrSessionId}`))
+      console.error(chalk.gray('Transcripts are stored in .quest/transcripts/'))
+      console.error(chalk.gray('Run quest traces to see available LLM sessions.'))
       process.exit(1)
     }
 
@@ -593,6 +677,25 @@ program
     }
 
     console.log('\n' + formatSessionTrace(match, entries) + '\n')
+  })
+
+/**
+ * quest clean [project-dir]
+ *
+ * Remove all session transcripts from .quest/transcripts/.
+ */
+program
+  .command('clean [project-dir]')
+  .description('Remove all session transcripts from .quest/transcripts/')
+  .action(async (projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { TranscriptCapture } = await import('./transcript.js')
+    const count = TranscriptCapture.cleanAll(projectDir)
+    if (count === 0) {
+      console.log(chalk.gray('No transcripts to clean.'))
+    } else {
+      console.log(chalk.green(`✓ Removed ${count} transcript${count === 1 ? '' : 's'} from .quest/transcripts/`))
+    }
   })
 
 program.parse()

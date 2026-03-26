@@ -25,12 +25,22 @@ export const DEFAULT_MODEL_PRICING: Record<string, ModelPricing> = {
     outputPer1M: 75.0,
     cacheReadPer1M: 1.5,
   },
+  'claude-opus-4-6': {
+    inputPer1M: 15.0,
+    outputPer1M: 75.0,
+    cacheReadPer1M: 1.5,
+  },
   'claude-sonnet-4-6': {
     inputPer1M: 3.0,
     outputPer1M: 15.0,
     cacheReadPer1M: 0.3,
   },
   'claude-haiku-4-5': {
+    inputPer1M: 0.8,
+    outputPer1M: 4.0,
+    cacheReadPer1M: 0.08,
+  },
+  'claude-haiku-4-6': {
     inputPer1M: 0.8,
     outputPer1M: 4.0,
     cacheReadPer1M: 0.08,
@@ -81,33 +91,46 @@ export interface RunCostSummary {
 /**
  * Compute cost summary from a list of quest events.
  * Uses agent_done events to aggregate token counts per agent type.
+ * If agent_done events include a `model` field, that model's pricing is used.
+ * Otherwise falls back to the provided default model.
  */
 export function computeRunCost(
   events: QuestEvent[],
   model = 'claude-sonnet-4-6',
   pricingTable: Record<string, ModelPricing> = DEFAULT_MODEL_PRICING,
 ): RunCostSummary {
-  // Aggregate token counts by agent type
-  const byAgent = new Map<AgentLabel, { inputTokens: number; outputTokens: number; cacheReadTokens: number }>()
+  // Accumulate cost per agent using per-event model pricing
+  const byAgent = new Map<AgentLabel, { inputTokens: number; outputTokens: number; cacheReadTokens: number; estimatedUsd: number }>()
 
   for (const event of events) {
     if (event.type !== 'agent_done') continue
     const { agent, inputTokens = 0, outputTokens = 0, cacheReadTokens = 0 } = event
-    const existing = byAgent.get(agent) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }
+    // Use per-event model if available, otherwise fall back to provided default
+    const eventModel = (event as { model?: string }).model ?? model
+    const tokens: TokenCounts = { inputTokens, outputTokens, cacheReadTokens }
+    const eventCost = calculateCost(tokens, eventModel, pricingTable)
+
+    const existing = byAgent.get(agent) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, estimatedUsd: 0 }
     byAgent.set(agent, {
       inputTokens: existing.inputTokens + inputTokens,
       outputTokens: existing.outputTokens + outputTokens,
       cacheReadTokens: existing.cacheReadTokens + cacheReadTokens,
+      estimatedUsd: existing.estimatedUsd + eventCost,
     })
   }
 
   const breakdowns: AgentCostBreakdown[] = []
   let totalCostUsd = 0
 
-  for (const [agent, tokens] of byAgent.entries()) {
-    const estimatedUsd = calculateCost(tokens, model, pricingTable)
-    totalCostUsd += estimatedUsd
-    breakdowns.push({ agent, ...tokens, estimatedUsd })
+  for (const [agent, data] of byAgent.entries()) {
+    totalCostUsd += data.estimatedUsd
+    breakdowns.push({
+      agent,
+      inputTokens: data.inputTokens,
+      outputTokens: data.outputTokens,
+      cacheReadTokens: data.cacheReadTokens,
+      estimatedUsd: data.estimatedUsd,
+    })
   }
 
   // Sort by cost descending for display

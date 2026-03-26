@@ -74,6 +74,19 @@ function getWorkerState(workerId: number): WorkerLogState {
   return state
 }
 
+/** Currently active model (set before running each agent) */
+let currentModel: string = 'claude-sonnet-4-6'
+
+/** Set the current model so agent_start/agent_done events include it */
+export function setCurrentModel(model: string): void {
+  currentModel = model
+}
+
+/** Get the current model */
+export function getCurrentModel(): string {
+  return currentModel
+}
+
 /** Reset turn counter at the start of each agent session */
 export function resetTurnCount(workerId = 0) {
   const state = getWorkerState(workerId)
@@ -174,12 +187,13 @@ export function logMessage(agent: AgentLabel, message: SDKMessage, workerId = 0)
       outputTokens: usage?.outputTokens,
       cacheReadTokens: usage?.cacheReadInputTokens,
       workerId,
+      model: currentModel,
     })
   }
 
   if (message.type === 'system' && message.subtype === 'init') {
     state.turnCount = 0
     process.stdout.write(`${prefix}${chalk.gray('session started')}\n`)
-    emit({ type: 'agent_start', agent, workerId })
+    emit({ type: 'agent_start', agent, workerId, model: currentModel })
   }
 }

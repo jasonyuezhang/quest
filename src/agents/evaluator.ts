@@ -1,8 +1,9 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
-import { logMessage, resetTurnCount } from '../logger.js'
+import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
 import type { TraceSession } from '../trace.js'
+import { TranscriptCapture } from '../transcript.js'
 
 /**
  * System prompt for the evaluator (verifier) agent.
@@ -65,6 +66,46 @@ Test as a REAL USER would. Don't just check if elements exist — actually inter
 - False negatives (failing a passing feature) are acceptable
 - False positives (passing a failing feature) are NOT acceptable
 
+## Regression Checks
+
+After evaluating the current feature's criteria, check sprint-contract.json for a
+"previouslyPassingFeatureIds" array. If it is present and non-empty, AND if
+"skipRegression" is NOT set to true, run a lightweight smoke check for each previous feature:
+
+1. Read features.json to find the acceptance criteria for each previously passing feature.
+2. Run a SINGLE quick smoke check per previously passing feature (not the full evaluation).
+   Focus on the most critical criterion only — one test per feature is sufficient.
+3. If a previously passing feature now fails its smoke check, record it as a regression.
+
+If regressions are found, set verdict to "fail" and add a "regressions" array to eval-report.json.
+Regressions block the current feature from passing.
+
+If no regressions are found (or the list is empty, or skipRegression is true), omit the field.
+
+## TDD Mode Verification
+
+If sprint-contract.json has "tddMode": true, perform these ADDITIONAL checks BEFORE your normal evaluation:
+
+1. Read sprint-completion.json — check that "testsWritten" is present and > 0.
+   If testsWritten is missing or 0, this is a TDD violation — fail the feature.
+
+2. Find the test files written by the coder:
+   - Look in __tests__/, tests/, *.test.*, *.spec.* for recently modified files
+   - Use: git diff HEAD~1 --name-only (or similar) to identify which files were added
+
+3. Re-run the test suite INDEPENDENTLY to verify tests pass:
+   - Run: npm test, npx vitest run, npx jest, pytest, or the appropriate test command
+   - ALL tests must pass when re-run independently
+   - If tests fail when re-run, the feature fails even if acceptance criteria appear met
+
+4. Verify that test files cover the acceptance criteria:
+   - At least one test should be identifiable for each acceptance criterion
+   - Tests must not be trivial (e.g., "expect(true).toBe(true)" is not acceptable)
+
+Record TDD verification results as additional criteria results:
+- "testsWritten count is present and > 0"
+- "test files exist and pass when re-run independently"
+
 ## Output Format
 
 Write eval-report.json with this EXACT structure:
@@ -78,10 +119,19 @@ Write eval-report.json with this EXACT structure:
       "evidence": "<what you actually saw, quoted or described specifically>"
     }
   ],
+  "regressions": [
+    {
+      "featureId": "<previously passing feature ID>",
+      "evidence": "<what failed: what you saw vs what you expected>"
+    }
+  ],
   "notes": "<1-3 sentence summary of what you found>",
   "evaluatedAt": "<ISO timestamp>",
   "sessionId": "unknown"
 }
+
+The "regressions" field is OPTIONAL — only include it if regressions were detected.
+If skipRegression is true in sprint-contract.json, skip all regression checks and omit the field.
 
 ## If Verdict is "pass"
 
@@ -107,8 +157,10 @@ export async function runEvaluatorAgent(
   featureId: string,
   contextManager: ContextManager,
   traceSession?: TraceSession | null,
+  options?: { noTranscripts?: boolean; model?: string },
 ): Promise<AgentResult> {
   const startTime = Date.now()
+  const model = options?.model ?? 'claude-sonnet-4-6'
 
   const prompt = `Evaluate feature: ${featureId}
 
@@ -120,6 +172,9 @@ If verdict is "pass", also update features.json to set passes:true for this feat
   let success = false
   let error: string | undefined
 
+  const capture = options?.noTranscripts ? null : new TranscriptCapture(projectDir, featureId, 'eval')
+
+  setCurrentModel(model)
   resetTurnCount()
   try {
     for await (const message of query({
@@ -128,7 +183,7 @@ If verdict is "pass", also update features.json to set passes:true for this feat
         cwd: projectDir,
         systemPrompt: EVALUATOR_SYSTEM_PROMPT,
         allowedTools: ['Read', 'Write', 'Bash', 'Glob', 'Grep'],
-        model: 'claude-sonnet-4-6',
+        model,
         maxTurns: 60,
         mcpServers: {
           playwright: {
@@ -140,6 +195,7 @@ If verdict is "pass", also update features.json to set passes:true for this feat
     })) {
       logMessage('eval', message)
       traceSession?.recordSDKMessage(message as Parameters<TraceSession['recordSDKMessage']>[0])
+      capture?.recordSDKMessage(message as Parameters<TranscriptCapture['recordSDKMessage']>[0])
       if (message.type === 'result') {
         sessionId = message.session_id ?? sessionId
         success = !message.is_error
@@ -153,6 +209,8 @@ If verdict is "pass", also update features.json to set passes:true for this feat
     error = err instanceof Error ? err.message : String(err)
     success = false
   }
+
+  capture?.end()
 
   const stats = contextManager.getStats()
   return {

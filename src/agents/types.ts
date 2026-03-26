@@ -46,6 +46,12 @@ export interface SprintContract {
   acceptanceCriteria: string[]
   browserTestUrl?: string
   startedAt: string
+  /** IDs of features that previously passed — evaluator runs smoke checks on these */
+  previouslyPassingFeatureIds?: string[]
+  /** If true, skip regression checks for speed during development */
+  skipRegression?: boolean
+  /** If true, coder is operating in TDD mode (write tests first, then implement) */
+  tddMode?: boolean
 }
 
 /**
@@ -61,6 +67,8 @@ export interface SprintCompletion {
   sessionId: string
   /** If true, coder hit context limit and wrote a partial completion */
   isPartial?: boolean
+  /** Number of test files written during TDD mode (only present in TDD mode) */
+  testsWritten?: number
 }
 
 /**
@@ -118,6 +126,16 @@ export interface ReviewReport {
 }
 
 /**
+ * A regression detected by the evaluator: a previously passing feature that now fails.
+ */
+export interface RegressionResult {
+  /** ID of the previously passing feature that regressed */
+  featureId: string
+  /** Concrete evidence of the regression */
+  evidence: string
+}
+
+/**
  * Evaluation report written by the evaluator agent.
  * Orchestrator reads this to determine whether to commit or retry.
  */
@@ -130,6 +148,8 @@ export interface EvalReport {
   sessionId: string
   /** Classification of the failure cause (only set when verdict is 'fail') */
   failureCategory?: string
+  /** Regressions detected in previously passing features (blocks pass even if verdict is 'pass') */
+  regressions?: RegressionResult[]
 }
 
 /** What an agent session produces (returned to orchestrator) */
@@ -169,6 +189,18 @@ export interface WorkerResult {
   failureCategory?: string
 }
 
+/** Supported models for agent selection */
+export const SUPPORTED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'] as const
+export type SupportedModel = typeof SUPPORTED_MODELS[number]
+
+/** Per-agent model configuration (stored in .quest/config.json) */
+export interface ModelConfig {
+  coder?: string
+  evaluator?: string
+  reviewer?: string
+  planner?: string
+}
+
 /** Orchestrator configuration */
 export interface OrchestratorOptions {
   projectDir: string
@@ -182,6 +214,12 @@ export interface OrchestratorOptions {
   dryRun?: boolean
   /** Override model for all agents */
   model?: string
+  /** Override model specifically for the coder agent */
+  coderModel?: string
+  /** Override model specifically for the evaluator agent */
+  evaluatorModel?: string
+  /** Override model specifically for the reviewer agent */
+  reviewerModel?: string
   /** Maximum parallel workers — scheduler auto-adjusts based on DAG width (default: 4) */
   maxConcurrency?: number
   /** Run a reviewer agent between coder and evaluator (default: false) */
@@ -192,4 +230,10 @@ export interface OrchestratorOptions {
   skipInit?: boolean
   /** Timeout in seconds for health check polling after init.sh (default: 30) */
   healthTimeout?: number
+  /** Disable session transcript capture to save disk space (default: false) */
+  noTranscripts?: boolean
+  /** Skip regression checks in evaluator for speed during development (default: false) */
+  skipRegression?: boolean
+  /** Enable TDD mode: coder writes failing tests first, then implements to make them pass (default: false) */
+  tdd?: boolean
 }

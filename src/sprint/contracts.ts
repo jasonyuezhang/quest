@@ -12,7 +12,12 @@ const REVIEW_REPORT_FILE = 'review-report.json'
 const CURRENT_FEATURE_FILE = 'current-feature.json'
 
 /** Build a sprint contract from a feature's acceptance criteria */
-export function buildSprintContract(feature: Feature): SprintContract {
+export function buildSprintContract(
+  feature: Feature,
+  previouslyPassingFeatureIds?: string[],
+  skipRegression?: boolean,
+  tddMode?: boolean,
+): SprintContract {
   return {
     featureId: feature.id,
     featureName: feature.name,
@@ -20,6 +25,11 @@ export function buildSprintContract(feature: Feature): SprintContract {
     acceptanceCriteria: feature.acceptanceCriteria,
     browserTestUrl: feature.browserTestUrl,
     startedAt: new Date().toISOString(),
+    ...(previouslyPassingFeatureIds && previouslyPassingFeatureIds.length > 0
+      ? { previouslyPassingFeatureIds }
+      : {}),
+    ...(skipRegression ? { skipRegression: true } : {}),
+    ...(tddMode ? { tddMode: true } : {}),
   }
 }
 

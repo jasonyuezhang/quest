@@ -19,6 +19,7 @@ vi.mock('../../src/logger.js', () => ({
   printAgentBanner: vi.fn(),
   logMessage: vi.fn(),
   resetTurnCount: vi.fn(),
+  setCurrentModel: vi.fn(),
 }))
 
 import { runCoderAgent, ContextResetNeededError } from '../../src/agents/coder.js'

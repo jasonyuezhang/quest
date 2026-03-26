@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentResult, ReviewReport } from './types.js'
 import type { ContextManager } from '../context/manager.js'
-import { logMessage, resetTurnCount } from '../logger.js'
+import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
 
 const REVIEW_REPORT_FILE = 'review-report.json'
 
@@ -98,8 +98,10 @@ export async function runReviewerAgent(
   projectDir: string,
   featureId: string,
   contextManager: ContextManager,
+  options?: { model?: string },
 ): Promise<AgentResult> {
   const startTime = Date.now()
+  const model = options?.model ?? 'claude-sonnet-4-6'
 
   const prompt = `Review the coder's changes for feature: ${featureId}
 
@@ -109,6 +111,7 @@ Follow your startup protocol (pwd, git log, git show HEAD, read sprint-contract,
   let success = false
   let error: string | undefined
 
+  setCurrentModel(model)
   resetTurnCount()
   try {
     for await (const message of query({
@@ -117,7 +120,7 @@ Follow your startup protocol (pwd, git log, git show HEAD, read sprint-contract,
         cwd: projectDir,
         systemPrompt: REVIEWER_SYSTEM_PROMPT,
         allowedTools: ['Read', 'Write', 'Bash', 'Glob', 'Grep'],
-        model: 'claude-sonnet-4-6',
+        model,
         maxTurns: 30,
       },
     })) {
