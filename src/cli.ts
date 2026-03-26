@@ -992,4 +992,43 @@ pluginCmd
     }
   })
 
+/**
+ * quest retro [project-dir]
+ *
+ * Generate an AI-powered sprint retrospective analyzing what went well, what
+ * failed, and recommendations for improving the feature list and harness config.
+ * Reads quest-events.jsonl and uses Claude to produce a structured retrospective.
+ * Output is written to .quest/retros/<timestamp>.md.
+ */
+program
+  .command('retro [project-dir]')
+  .description('Generate an AI-powered sprint retrospective from quest-events.jsonl')
+  .action(async (projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    if (!existsSync(projectDir)) {
+      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
+      process.exit(1)
+    }
+
+    const eventsPath = resolve(projectDir, 'quest-events.jsonl')
+    if (!existsSync(eventsPath)) {
+      console.error(chalk.red(`No quest-events.jsonl found in: ${projectDir}`))
+      console.error(chalk.gray('Run quest run first to generate event data.'))
+      process.exit(1)
+    }
+
+    console.log(chalk.blue('Generating sprint retrospective with Claude...'))
+
+    const { generateRetro } = await import('./retro.js')
+
+    try {
+      const result = await generateRetro(projectDir)
+      console.log(chalk.green(`✓ Retrospective written to: ${result.retroPath}`))
+    } catch (err) {
+      console.error(chalk.red('Retrospective generation failed:'), err instanceof Error ? err.message : err)
+      process.exit(1)
+    }
+  })
+
 program.parse()
