@@ -1,8 +1,8 @@
 {
   "featureId": "project-setup-1",
-  "commitSha": "7640e79",
+  "commitSha": "",
   "testsPassed": true,
-  "notes": "Project structure is in place with src/ containing TypeScript source files organized in agents/, context/, sprint/, state/, and tui/ subdirectories. node_modules has 61 packages installed via npm. npm run dev (tsx src/cli.ts) starts cleanly without errors. All three acceptance criteria are satisfied.",
+  "notes": "Project structure is in place with src/, node_modules/, and all required source files. Dependencies are installed (61 packages, 0 vulnerabilities). Development server starts without errors via npm run dev.",
   "completedAt": "2026-03-26T09:40:00.000Z",
   "sessionId": "unknown"
 }
