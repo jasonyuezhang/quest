@@ -1,6 +1,6 @@
 {
   "featureId": "project-setup-1",
-  "commitSha": "a4ee9c5",
+  "commitSha": "9cc4f0b",
   "testsPassed": true,
   "notes": "Project structure is in place with src/ containing TypeScript source files, node_modules with 61 packages installed, and init.sh successfully starts the harness without errors. All three acceptance criteria are satisfied.",
   "completedAt": "2026-03-26T09:35:00.000Z",
