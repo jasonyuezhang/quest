@@ -15,6 +15,7 @@ eval-report.json
 review-report.json
 claude-progress.txt
 init.sh
+features.json
 
 # Coverage reports
 coverage/

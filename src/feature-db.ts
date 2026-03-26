@@ -45,7 +45,7 @@ export class FeatureDB {
   private db: Database.Database
 
   constructor(projectDir: string) {
-    const dbPath = join(projectDir, '.quest', 'features.db')
+    const dbPath = join(projectDir, '.quest', 'store', 'features.db')
     mkdirSync(dirname(dbPath), { recursive: true })
 
     this.db = new Database(dbPath)

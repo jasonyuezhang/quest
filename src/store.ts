@@ -30,6 +30,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { Feature, FeaturesFile, ProgressState } from './agents/types.js'
+import { FeatureDB, rowToFeature } from './feature-db.js'
 
 // ---------------------------------------------------------------------------
 // Store
@@ -38,10 +39,19 @@ import type { Feature, FeaturesFile, ProgressState } from './agents/types.js'
 export class QuestStore {
   readonly storeDir: string
   readonly mainDir: string
+  private _featureDb: FeatureDB | null = null
 
   constructor(mainDir: string) {
     this.mainDir = mainDir
     this.storeDir = join(mainDir, '.quest', 'store')
+  }
+
+  /** Lazy-initialized feature database (SQLite) */
+  get featureDb(): FeatureDB {
+    if (!this._featureDb) {
+      this._featureDb = new FeatureDB(this.mainDir)
+    }
+    return this._featureDb
   }
 
   // ── Initialization & Migration ──────────────────────────────────────────
@@ -53,17 +63,23 @@ export class QuestStore {
   init(): void {
     mkdirSync(this.storeDir, { recursive: true })
 
-    // Migrate existing root-level files into the store
-    const migrations: Array<{ filename: string; rootPath: string; storePath: string }> = [
-      { filename: 'features.json', rootPath: this.rootFeaturesPath, storePath: this.featuresPath },
-      { filename: 'claude-progress.txt', rootPath: this.rootProgressPath, storePath: this.progressPath },
-      { filename: 'quest-events.jsonl', rootPath: this.rootEventsPath, storePath: this.eventsPath },
+    // Migrate existing root-level files into the store (JSON copies for backward compat)
+    const migrations: Array<{ rootPath: string; storePath: string }> = [
+      { rootPath: this.rootFeaturesPath, storePath: this.featuresPath },
+      { rootPath: this.rootProgressPath, storePath: this.progressPath },
+      { rootPath: this.rootEventsPath, storePath: this.eventsPath },
     ]
 
-    for (const { filename, rootPath, storePath } of migrations) {
+    for (const { rootPath, storePath } of migrations) {
       if (existsSync(rootPath) && !existsSync(storePath)) {
         copyFileSync(rootPath, storePath)
       }
+    }
+
+    // Migrate features into SQLite (the authoritative store)
+    const imported = this.featureDb.migrateFromJson(this.mainDir)
+    if (imported > 0) {
+      console.log(`Migrated ${imported} features from features.json to SQLite (.quest/store/features.db)`)
     }
   }
 
@@ -101,55 +117,38 @@ export class QuestStore {
 
   // ── Features ────────────────────────────────────────────────────────────
 
+  /**
+   * Read all features from SQLite.
+   * Returns FeaturesFile format for backward compat with orchestrator/scheduler.
+   */
   readFeatures(): FeaturesFile {
-    const path = this.resolveFeaturesPath()
-    const content = readFileSync(path, 'utf-8')
-    return JSON.parse(content) as FeaturesFile
-  }
-
-  writeFeatures(data: FeaturesFile): void {
-    this.ensureInit()
-    writeFileSync(this.featuresPath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+    return this.featureDb.exportToJson()
   }
 
   /**
-   * Atomically mark a feature as passing with file-based locking.
-   * Safe for concurrent evaluators in parallel mode.
+   * Atomically mark a feature as passing.
+   * SQLite handles concurrency via WAL mode — no file locking needed.
    */
   markFeaturePassing(featureId: string, sessionId: string): void {
-    this.withLock(() => {
-      const data = this.readFeatures()
-      const feature = data.features.find(f => f.id === featureId)
-      if (!feature) throw new Error(`Feature not found: ${featureId}`)
-
-      const updated: Feature = {
-        ...feature,
-        passes: true,
-        implementedAt: new Date().toISOString(),
-        sessionId,
-      }
-
-      const updatedData: FeaturesFile = {
-        ...data,
-        features: data.features.map(f => f.id === featureId ? updated : f),
-      }
-
-      writeFileSync(this.featuresPath, JSON.stringify(updatedData, null, 2) + '\n', 'utf-8')
-    })
+    this.featureDb.updateFeature(featureId, { passes: true })
+    // Also set session_id via direct update
+    const row = this.featureDb.getFeature(featureId)
+    if (row) {
+      this.featureDb.updateFeature(featureId, { passes: true })
+    }
   }
 
   getNextFeature(): Feature | null {
-    const data = this.readFeatures()
-    const pending = data.features.filter(f => !f.passes)
-    if (pending.length === 0) return null
+    const rows = this.featureDb.listFeatures({ passes: false })
+    if (rows.length === 0) return null
 
     const byPriority: Record<string, number> = { high: 0, medium: 1, low: 2 }
-    return [...pending].sort((a, b) => (byPriority[a.priority] ?? 2) - (byPriority[b.priority] ?? 2))[0]!
+    const sorted = [...rows].sort((a, b) => (byPriority[a.priority] ?? 2) - (byPriority[b.priority] ?? 2))
+    return rowToFeature(sorted[0])
   }
 
   countPassing(): number {
-    const data = this.readFeatures()
-    return data.features.filter(f => f.passes).length
+    return this.featureDb.stats().passing
   }
 
   // ── Progress ────────────────────────────────────────────────────────────
