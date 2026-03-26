@@ -479,6 +479,7 @@ export class Orchestrator {
         emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
         this.ciLog({ event: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
         await this.pluginManager.onFeatureStart({ projectDir, feature: next, index: passing + 1, total })
+        this.store.featureDb.setFeatureStatus(next.id, 'in_progress')
 
         if (dryRun) {
           this.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
@@ -498,9 +499,11 @@ export class Orchestrator {
 
         if (verdict === 'pass') {
           implemented++
+          this.store.featureDb.setFeatureStatus(next.id, 'passed')
           this.log(chalk.green(`\n✓ ${next.id} passed`))
         } else {
           failed++
+          this.store.featureDb.setFeatureStatus(next.id, 'failed')
           this.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
           await this.markFeatureSkipped(next)
         }
@@ -655,6 +658,7 @@ export class Orchestrator {
             const worktree = await workerPool.acquire(projectDir)
             worktreeMap.set(feature.id, worktree)
 
+            this.store.featureDb.setFeatureStatus(feature.id, 'in_progress', worktree.workerId)
             emit({
               type: 'feature_start',
               featureId: feature.id,
@@ -728,6 +732,7 @@ export class Orchestrator {
           if (picked) {
             implemented++
             completed.add(featureId)
+            this.store.featureDb.setFeatureStatus(featureId, 'passed', wr.workerId)
             this.log(chalk.green(`\n✓ [W${wr.workerId}] ${featureId} passed (${(wr.durationMs / 1000).toFixed(0)}s)`))
 
             // Check for newly unblocked features
@@ -744,6 +749,7 @@ export class Orchestrator {
         } else {
           failed++
           completed.add(featureId) // mark as completed (failed) so we don't re-dispatch
+          this.store.featureDb.setFeatureStatus(featureId, 'failed')
           this.log(chalk.red(`\n✗ [W${wr.workerId}] ${featureId} failed${wr.error ? `: ${wr.error}` : ''}`))
         }
 

@@ -84,8 +84,10 @@
 <div class="header">
   <h1><span>Quest</span> Feature Board</h1>
   <div class="stats">
-    <div><span class="num" id="stat-passing">0</span> passing</div>
+    <div><span class="num" id="stat-passing">0</span> passed</div>
+    <div><span class="num" id="stat-inprogress">0</span> in-progress</div>
     <div><span class="num" id="stat-pending">0</span> pending</div>
+    <div><span class="num" id="stat-failed">0</span> failed</div>
     <div><span class="num" id="stat-total">0</span> total</div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
@@ -100,6 +102,7 @@
   <span id="features-toolbar" style="display:contents">
     <button id="view-board" class="active" onclick="setView('board')">Board</button>
     <button id="view-list" onclick="setView('list')">List</button>
+    <button id="view-dag" onclick="setView('dag')">DAG</button>
     <input class="search" id="search" placeholder="Search features..." oninput="render()">
     <select id="filter-priority" onchange="render()">
       <option value="">All priorities</option>
@@ -127,6 +130,7 @@
 <div id="features-panel">
   <div id="board-view" class="board"></div>
   <div id="list-view" class="list" style="display:none"></div>
+  <div id="dag-view" style="display:none;padding:24px;overflow:auto"></div>
 </div>
 <div id="traces-panel" style="display:none">
   <div class="list" id="traces-content"></div>
@@ -186,7 +190,9 @@ async function load() {
   const stats = await statsRes.json()
 
   document.getElementById('stat-passing').textContent = stats.passing
+  document.getElementById('stat-inprogress').textContent = stats.inProgress ?? 0
   document.getElementById('stat-pending').textContent = stats.pending
+  document.getElementById('stat-failed').textContent = stats.failed ?? 0
   document.getElementById('stat-total').textContent = stats.total
   const pct = stats.total > 0 ? Math.round((stats.passing / stats.total) * 100) : 0
   document.getElementById('progress-fill').style.width = pct + '%'
@@ -218,16 +224,24 @@ function getFiltered() {
 
 function render() {
   if (view === 'board') renderBoard()
+  else if (view === 'dag') renderDAG()
   else renderList()
+}
+
+function getStatus(f) {
+  if (f.status) return f.status
+  if (f.passes) return 'passed'
+  return 'pending'
 }
 
 function renderBoard() {
   const filtered = getFiltered()
   const columns = {
-    'High Priority': filtered.filter(f => f.priority === 'high' && !f.passes),
-    'Medium Priority': filtered.filter(f => f.priority === 'medium' && !f.passes),
-    'Low Priority': filtered.filter(f => f.priority === 'low' && !f.passes),
-    'Passed': filtered.filter(f => f.passes),
+    'Pending': filtered.filter(f => getStatus(f) === 'pending'),
+    'In Progress': filtered.filter(f => getStatus(f) === 'in_progress'),
+    'Passed': filtered.filter(f => getStatus(f) === 'passed'),
+    'Failed': filtered.filter(f => getStatus(f) === 'failed'),
+    "Won't Do": filtered.filter(f => getStatus(f) === 'wont_do'),
   }
 
   const board = document.getElementById('board-view')
@@ -251,6 +265,7 @@ function renderBoard() {
 
 function cardHTML(f) {
   const deps = f.dependsOn?.length ? `<div class="deps-list">${f.dependsOn.map(d => `<span class="dep-tag">${d}</span>`).join('')}</div>` : ''
+  const worker = f.worker_id ? `<span class="tag" style="background:rgba(210,153,34,0.15);color:var(--yellow)">W${f.worker_id}</span>` : ''
   return `
     <div class="card" onclick="openEditModal('${f.id}')">
       <div class="card-title">${esc(f.name)}</div>
@@ -258,6 +273,7 @@ function cardHTML(f) {
       <div class="card-meta">
         <span class="tag ${f.priority}">${f.priority}</span>
         <span class="tag cat">${f.category}</span>
+        ${worker}
         <span class="criteria-count">${f.acceptanceCriteria.length} criteria</span>
       </div>
       ${deps}
@@ -292,8 +308,10 @@ function setView(v) {
   view = v
   document.getElementById('board-view').style.display = v === 'board' ? 'flex' : 'none'
   document.getElementById('list-view').style.display = v === 'list' ? 'block' : 'none'
+  document.getElementById('dag-view').style.display = v === 'dag' ? 'block' : 'none'
   document.getElementById('view-board').className = v === 'board' ? 'active' : ''
   document.getElementById('view-list').className = v === 'list' ? 'active' : ''
+  document.getElementById('view-dag').className = v === 'dag' ? 'active' : ''
   render()
 }
 
@@ -543,6 +561,148 @@ async function loadTopTools() {
     `).join('')}
   `
 }
+
+// ── DAG View ──────────────────────────────────────────────────────────
+
+function renderDAG() {
+  const el = document.getElementById('dag-view')
+  const filtered = getFiltered()
+
+  // Build dependency graph and compute levels
+  const nodeMap = new Map()
+  for (const f of filtered) {
+    nodeMap.set(f.id, { ...f, level: 0, deps: f.dependsOn || [], dependents: [] })
+  }
+  // Wire dependents
+  for (const [id, node] of nodeMap) {
+    for (const depId of node.deps) {
+      const parent = nodeMap.get(depId)
+      if (parent) parent.dependents.push(id)
+    }
+  }
+  // Compute levels (topological)
+  const visited = new Set()
+  function computeLevel(id) {
+    if (visited.has(id)) return nodeMap.get(id)?.level ?? 0
+    visited.add(id)
+    const node = nodeMap.get(id)
+    if (!node) return 0
+    if (node.deps.length === 0) { node.level = 0; return 0 }
+    let maxDep = 0
+    for (const d of node.deps) {
+      maxDep = Math.max(maxDep, computeLevel(d) + 1)
+    }
+    node.level = maxDep
+    return maxDep
+  }
+  for (const id of nodeMap.keys()) computeLevel(id)
+
+  // Group by level
+  const levels = new Map()
+  for (const [id, node] of nodeMap) {
+    if (!levels.has(node.level)) levels.set(node.level, [])
+    levels.get(node.level).push(node)
+  }
+  const maxLevel = Math.max(...levels.keys(), 0)
+
+  // Status colors
+  const statusColor = { pending: 'var(--border)', in_progress: 'var(--yellow)', passed: 'var(--green)', failed: 'var(--red)', wont_do: 'var(--text-dim)' }
+  const statusBg = { pending: 'var(--surface)', in_progress: 'rgba(210,153,34,0.1)', passed: 'rgba(63,185,80,0.1)', failed: 'rgba(248,81,73,0.1)', wont_do: 'rgba(72,79,88,0.1)' }
+
+  // Layout constants
+  const nodeW = 200, nodeH = 60, gapX = 80, gapY = 20, padX = 40, padY = 40
+
+  // Compute positions
+  const positions = new Map()
+  for (let lvl = 0; lvl <= maxLevel; lvl++) {
+    const nodes = levels.get(lvl) || []
+    const x = padX + lvl * (nodeW + gapX)
+    for (let i = 0; i < nodes.length; i++) {
+      const y = padY + i * (nodeH + gapY)
+      positions.set(nodes[i].id, { x, y, node: nodes[i] })
+    }
+  }
+
+  const totalW = padX * 2 + (maxLevel + 1) * (nodeW + gapX)
+  const maxNodesInLevel = Math.max(...Array.from(levels.values()).map(n => n.length), 1)
+  const totalH = padY * 2 + maxNodesInLevel * (nodeH + gapY)
+
+  // Render SVG
+  let svg = `<svg width="${totalW}" height="${totalH}" style="min-width:${totalW}px">`
+
+  // Draw edges first (behind nodes)
+  for (const [id, pos] of positions) {
+    const node = pos.node
+    for (const depId of node.deps) {
+      const depPos = positions.get(depId)
+      if (!depPos) continue
+      const x1 = depPos.x + nodeW, y1 = depPos.y + nodeH / 2
+      const x2 = pos.x, y2 = pos.y + nodeH / 2
+      const cx = (x1 + x2) / 2
+      const depStatus = getStatus(depPos.node)
+      const edgeColor = depStatus === 'passed' ? 'var(--green)' : 'var(--border)'
+      svg += `<path d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}" fill="none" stroke="${edgeColor}" stroke-width="2" opacity="0.5"/>`
+      // Arrowhead
+      svg += `<polygon points="${x2},${y2} ${x2 - 8},${y2 - 4} ${x2 - 8},${y2 + 4}" fill="${edgeColor}" opacity="0.5"/>`
+    }
+  }
+
+  // Draw nodes
+  for (const [id, pos] of positions) {
+    const node = pos.node
+    const status = getStatus(node)
+    const borderColor = statusColor[status] || 'var(--border)'
+    const bg = statusBg[status] || 'var(--surface)'
+    const priColor = node.priority === 'high' ? 'var(--high)' : node.priority === 'medium' ? 'var(--medium)' : 'var(--low)'
+    const workerLabel = node.worker_id ? `W${node.worker_id}` : ''
+
+    svg += `
+      <g style="cursor:pointer" onclick="openEditModal('${id}')">
+        <rect x="${pos.x}" y="${pos.y}" width="${nodeW}" height="${nodeH}" rx="6" fill="${bg}" stroke="${borderColor}" stroke-width="2"/>
+        <text x="${pos.x + 8}" y="${pos.y + 18}" fill="var(--text)" font-size="12" font-weight="500">${esc(node.name.slice(0, 24))}${node.name.length > 24 ? '...' : ''}</text>
+        <text x="${pos.x + 8}" y="${pos.y + 34}" fill="var(--text-muted)" font-size="10">${id}</text>
+        <text x="${pos.x + 8}" y="${pos.y + 50}" fill="${priColor}" font-size="10">${node.priority}</text>
+        <text x="${pos.x + nodeW - 8}" y="${pos.y + 50}" fill="var(--text-dim)" font-size="10" text-anchor="end">${status}${workerLabel ? ' ' + workerLabel : ''}</text>
+      </g>
+    `
+  }
+
+  svg += '</svg>'
+
+  // Level labels
+  let levelLabels = '<div style="display:flex;gap:' + (nodeW + gapX - 50) + 'px;padding-left:' + padX + 'px;margin-bottom:8px">'
+  for (let i = 0; i <= maxLevel; i++) {
+    const count = (levels.get(i) || []).length
+    levelLabels += `<div style="width:${nodeW}px;font-size:12px;color:var(--text-muted)">Level ${i} <span style="color:var(--text-dim)">(${count})</span></div>`
+  }
+  levelLabels += '</div>'
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px;color:var(--text-muted);font-size:13px">
+      ${nodeMap.size} features, ${maxLevel + 1} levels, max parallelism: ${maxNodesInLevel}
+    </div>
+    ${levelLabels}
+    <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+      ${svg}
+    </div>
+  `
+}
+
+// ── Auto-refresh (live status updates from agents) ────────────────────
+
+let autoRefreshInterval = null
+
+function startAutoRefresh() {
+  if (autoRefreshInterval) return
+  autoRefreshInterval = setInterval(load, 3000) // poll every 3 seconds
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshInterval) { clearInterval(autoRefreshInterval); autoRefreshInterval = null }
+}
+
+// Auto-refresh when on features tab (agents may be updating status)
+startAutoRefresh()
 
 // Close modals on Escape
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeTraceModal() } })

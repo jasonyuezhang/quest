@@ -55,7 +55,12 @@ export function startDashboard(projectDir: string, port: number): void {
     if (req.query.passes !== undefined) filters.passes = req.query.passes === 'true'
 
     const rows = db.listFeatures(filters as Parameters<FeatureDB['listFeatures']>[0])
-    res.json(rows.map(rowToFeature))
+    // Return enriched data with status and worker_id for the dashboard
+    res.json(rows.map(row => ({
+      ...rowToFeature(row),
+      status: row.status ?? (row.passes ? 'passed' : 'pending'),
+      worker_id: row.worker_id,
+    })))
   })
 
   app.get('/api/features/:id', (req, res) => {

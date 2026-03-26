@@ -23,6 +23,8 @@ const SCHEMA = `
     acceptance_criteria TEXT NOT NULL,
     browser_test_url  TEXT,
     depends_on        TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'passed', 'failed', 'wont_do')),
+    worker_id         INTEGER,
     passes            INTEGER NOT NULL DEFAULT 0,
     implemented_at    TEXT,
     session_id        TEXT,
@@ -55,6 +57,22 @@ export class FeatureDB {
     this.db.pragma('foreign_keys = ON')
 
     this.db.exec(SCHEMA)
+
+    // Add columns to existing databases (idempotent)
+    try { this.db.exec("ALTER TABLE features ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'") } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE features ADD COLUMN worker_id INTEGER') } catch { /* already exists */ }
+    try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_features_status ON features(status)') } catch { /* ignore */ }
+  }
+
+  // ── Status management (called by orchestrator) ──────────────────────────
+
+  setFeatureStatus(id: string, status: 'pending' | 'in_progress' | 'passed' | 'failed' | 'wont_do', workerId?: number): void {
+    const passes = status === 'passed' ? 1 : 0
+    this.db.prepare(`
+      UPDATE features SET status = @status, worker_id = @worker_id, passes = @passes, updated_at = datetime('now')
+      ${status === 'passed' ? ", implemented_at = datetime('now')" : ''}
+      WHERE id = @id
+    `).run({ id, status, worker_id: workerId ?? null, passes })
   }
 
   // ── Migration ───────────────────────────────────────────────────────────
@@ -142,11 +160,15 @@ export class FeatureDB {
     return row?.value ?? 'quest'
   }
 
-  stats(): { total: number; passing: number; pending: number; categories: string[] } {
+  stats(): { total: number; passing: number; pending: number; inProgress: number; failed: number; wontDo: number; categories: string[] } {
     const total = (this.db.prepare('SELECT COUNT(*) as c FROM features').get() as { c: number }).c
-    const passing = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE passes = 1').get() as { c: number }).c
+    const passing = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE status = \'passed\'').get() as { c: number }).c
+    const inProgress = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE status = \'in_progress\'').get() as { c: number }).c
+    const failed = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE status = \'failed\'').get() as { c: number }).c
+    const wontDo = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE status = \'wont_do\'').get() as { c: number }).c
+    const pending = total - passing - inProgress - failed - wontDo
     const cats = this.db.prepare('SELECT DISTINCT category FROM features ORDER BY category').all() as Array<{ category: string }>
-    return { total, passing, pending: total - passing, categories: cats.map(c => c.category) }
+    return { total, passing, pending, inProgress, failed, wontDo, categories: cats.map(c => c.category) }
   }
 
   // ── Writes ──────────────────────────────────────────────────────────────
@@ -251,6 +273,8 @@ export interface FeatureRow {
   acceptance_criteria: string
   browser_test_url: string | null
   depends_on: string | null
+  status: string
+  worker_id: number | null
   passes: number
   implemented_at: string | null
   session_id: string | null
