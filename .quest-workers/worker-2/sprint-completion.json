@@ -1,8 +1,8 @@
 {
   "featureId": "webhook-notifications-15",
-  "commitSha": "64a7486",
+  "commitSha": "8053d8e",
   "testsPassed": true,
-  "notes": "Webhook notifications fully implemented: sendWebhook/sendSlackNotification in src/webhook.ts with FeatureDonePayload and RunCompletePayload types, --webhook and --notify CLI flags wired to orchestrator, and 21 unit tests covering payload format and error handling. All 474 tests pass.",
-  "completedAt": "2026-03-26T21:42:00.000Z",
+  "notes": "Implemented webhook.ts with sendWebhook, sendSlackNotification, notifyFeatureDone, and notifyRunComplete functions. CLI has --webhook <url> and --notify slack flags. Orchestrator calls these on feature_done and run_complete events. Failed deliveries are logged but never thrown. All 21 unit tests verify payload format and error handling; 474 total tests passing.",
+  "completedAt": "2026-03-26T21:43:59.000Z",
   "sessionId": "unknown"
 }
