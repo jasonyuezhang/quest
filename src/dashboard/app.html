@@ -245,8 +245,17 @@ function renderBoard() {
   }
 
   const board = document.getElementById('board-view')
+
+  // Save scroll positions of each column body before re-rendering
+  const scrollPositions = new Map()
+  const existingBodies = board.querySelectorAll('.column-body')
+  existingBodies.forEach((body, i) => {
+    scrollPositions.set(i, body.scrollTop)
+  })
+
   board.innerHTML = ''
 
+  let colIdx = 0
   for (const [title, items] of Object.entries(columns)) {
     const col = document.createElement('div')
     col.className = 'column'
@@ -260,6 +269,14 @@ function renderBoard() {
       </div>
     `
     board.appendChild(col)
+
+    // Restore scroll position
+    const savedScroll = scrollPositions.get(colIdx)
+    if (savedScroll) {
+      const body = col.querySelector('.column-body')
+      if (body) body.scrollTop = savedScroll
+    }
+    colIdx++
   }
 }
 
