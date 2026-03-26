@@ -1,8 +1,8 @@
 {
   "featureId": "cli-init-command-basic",
-  "commitSha": "fbc86f0",
+  "commitSha": "cf4939a",
   "testsPassed": true,
-  "notes": "Implemented createBasicScaffold() in src/scaffold.ts and wired it to the 'quest init <dir>' CLI command. Creates init.sh (executable), features.json (15 placeholder features, exceeding the 10 minimum), and claude-progress.txt (valid JSON). Command exits with code 0 and prints a confirmation message on success.",
-  "completedAt": "2026-03-26T08:34:00.000Z",
-  "sessionId": "context-reset-0"
+  "notes": "The quest init <dir> command is fully implemented. It creates init.sh (executable), features.json (15 features, exceeding the 10 minimum), and claude-progress.txt (valid JSON). Command exits with code 0 and prints a confirmation message on success.",
+  "completedAt": "2026-03-26T08:35:00.000Z",
+  "sessionId": "unknown"
 }
