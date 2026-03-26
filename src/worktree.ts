@@ -43,7 +43,12 @@ export async function createWorktree(mainDir: string, workerId: number): Promise
     try {
       await execAsync(`git worktree remove "${dir}" --force`, { cwd: mainDir })
     } catch {
-      // May fail if already removed — that's fine
+      // git worktree remove may fail if the worktree wasn't registered (e.g., leftover
+      // directory from a crashed run). Fall back to rm -rf.
+    }
+    // If directory still exists after git worktree remove, force-delete it
+    if (existsSync(dir)) {
+      await execAsync(`rm -rf "${dir}"`)
     }
   }
 

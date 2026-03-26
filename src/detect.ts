@@ -27,8 +27,11 @@ export type ProjectState =
  *   5. All features pass → complete (nothing to do)
  */
 export async function detectProjectState(projectDir: string): Promise<ProjectState> {
-  const featuresPath = join(projectDir, 'features.json')
-  const progressPath = join(projectDir, 'claude-progress.txt')
+  // Prefer store paths if the centralized store exists, fall back to repo root
+  const storeFeaturesPath = join(projectDir, '.quest', 'store', 'features.json')
+  const storeProgressPath = join(projectDir, '.quest', 'store', 'claude-progress.txt')
+  const featuresPath = existsSync(storeFeaturesPath) ? storeFeaturesPath : join(projectDir, 'features.json')
+  const progressPath = existsSync(storeProgressPath) ? storeProgressPath : join(projectDir, 'claude-progress.txt')
   const handoffPath = join(projectDir, 'sprint-context-handoff.json')
 
   // Signal 1: No features.json means the project has never been initialized
