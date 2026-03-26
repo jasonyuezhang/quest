@@ -69,7 +69,7 @@ export async function sendSlackNotification(message: string, webhookUrl?: string
       console.error(`[notify/slack] Delivery failed (HTTP ${response.status}): ${url}`)
     }
   } catch (err) {
-    console.error(`[notify/slack] Delivery error: ${err instanceof Error ? err.message : String(err)}`)
+    console.error('[notify/slack]', `Delivery error: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
