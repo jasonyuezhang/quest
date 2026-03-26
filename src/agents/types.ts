@@ -186,4 +186,8 @@ export interface OrchestratorOptions {
   review?: boolean
   /** Maximum context window tokens for dynamic budgeting (default: 200000) */
   maxContextTokens?: number
+  /** Skip running init.sh before dispatching agents (default: false) */
+  skipInit?: boolean
+  /** Timeout in seconds for health check polling after init.sh (default: 30) */
+  healthTimeout?: number
 }

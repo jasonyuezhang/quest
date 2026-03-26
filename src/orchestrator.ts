@@ -109,10 +109,101 @@ export class Orchestrator {
       maxConcurrency: 4,
       review: false,
       maxContextTokens: 200_000,
+      skipInit: false,
+      healthTimeout: 30,
       ...opts,
     }
     this.tracer = new Tracer(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
+  }
+
+  /**
+   * Run init.sh in the project directory with up to 3 retries.
+   * Emits init_failed events on each failure.
+   * If QUEST_HEALTH_URL is set in the child process environment, polls it until healthy.
+   * Throws if all retries are exhausted.
+   */
+  async runInitSh(): Promise<void> {
+    const { projectDir, skipInit, healthTimeout } = this.opts
+    const initSh = join(projectDir, 'init.sh')
+
+    if (skipInit) {
+      console.log(chalk.gray('Skipping init.sh (--skip-init)'))
+      return
+    }
+
+    if (!existsSync(initSh)) {
+      return
+    }
+
+    const MAX_RETRIES = 3
+    let lastError = ''
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { stdout, stderr } = await execAsync('bash init.sh', {
+          cwd: projectDir,
+          env: { ...process.env },
+        })
+
+        // Check for health check URL set in environment or output by init.sh
+        const healthUrl = process.env.QUEST_HEALTH_URL
+        if (healthUrl) {
+          await this.pollHealthCheck(healthUrl, healthTimeout)
+        }
+
+        // Also check stdout/stderr for QUEST_HEALTH_URL assignment
+        const urlMatch = (stdout + stderr).match(/QUEST_HEALTH_URL=([^\s\n]+)/)
+        if (urlMatch) {
+          await this.pollHealthCheck(urlMatch[1], healthTimeout)
+        }
+
+        return // success
+      } catch (err) {
+        const execErr = err as { code?: number; stderr?: string; message?: string }
+        const stderr = execErr.stderr ?? ''
+        const exitCode = execErr.code ?? null
+        lastError = stderr || (execErr.message ?? 'unknown error')
+
+        emit({ type: 'init_failed', attempt, exitCode, stderr })
+        console.error(chalk.red(`init.sh failed (attempt ${attempt}/${MAX_RETRIES}): exit code ${exitCode ?? 'unknown'}`))
+        if (stderr) {
+          console.error(chalk.gray(stderr.trim()))
+        }
+
+        if (attempt < MAX_RETRIES) {
+          console.log(chalk.yellow(`Retrying init.sh...`))
+        }
+      }
+    }
+
+    throw new Error(`init.sh failed after ${MAX_RETRIES} attempts. Last error: ${lastError}`)
+  }
+
+  /**
+   * Poll a health check URL until it returns 2xx or the timeout elapses.
+   */
+  private async pollHealthCheck(url: string, timeoutSeconds: number): Promise<void> {
+    const deadline = Date.now() + timeoutSeconds * 1000
+    const interval = 1000
+
+    console.log(chalk.gray(`Polling health check: ${url} (timeout: ${timeoutSeconds}s)`))
+
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(url)
+        if (response.ok) {
+          console.log(chalk.green(`✓ Health check passed: ${url}`))
+          return
+        }
+      } catch {
+        // Not yet healthy — continue polling
+      }
+
+      await new Promise(resolve => setTimeout(resolve, interval))
+    }
+
+    throw new Error(`Health check timed out after ${timeoutSeconds}s: ${url}`)
   }
 
   /**
@@ -168,6 +259,7 @@ export class Orchestrator {
     const runStart = Date.now()
 
     initEventLog(projectDir)
+    await this.runInitSh()
     await this.agentGit.init()
 
     if (maxConcurrency > 1) {
