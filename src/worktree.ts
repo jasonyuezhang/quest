@@ -10,6 +10,8 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { existsSync, cpSync, mkdirSync } from 'node:fs'
+import { attemptMergeTreeResolution, trackConflict } from './conflict-resolution.js'
+import { emit } from './events.js'
 
 const execAsync = promisify(exec)
 
@@ -83,6 +85,58 @@ export async function cherryPickToMain(mainDir: string, commitSha: string): Prom
     }
     return false
   }
+}
+
+/**
+ * Cherry-pick a commit onto the current branch, with automatic 3-way merge fallback.
+ *
+ * If the plain cherry-pick fails, this attempts a 3-way merge using `git merge-tree`.
+ * If the merge is clean it is applied directly (avoids expensive sequential re-run).
+ * Otherwise a `conflict_detected` event is emitted and the caller should retry
+ * the feature sequentially.
+ *
+ * Returns true if the commit was successfully applied (either via cherry-pick or
+ * 3-way merge), false if it needs to be retried sequentially.
+ */
+export async function cherryPickToMainWithResolution(
+  mainDir: string,
+  commitSha: string,
+  sourceFeatureId: string,
+  targetFeatureId: string,
+): Promise<boolean> {
+  // First try a plain cherry-pick
+  try {
+    await execAsync(`git cherry-pick ${commitSha}`, { cwd: mainDir })
+    return true
+  } catch {
+    // Abort the failed cherry-pick before trying merge-tree
+    try {
+      await execAsync('git cherry-pick --abort', { cwd: mainDir })
+    } catch {
+      // May fail if nothing to abort
+    }
+  }
+
+  // Plain cherry-pick failed — try 3-way merge via merge-tree
+  const resolution = await attemptMergeTreeResolution(mainDir, commitSha)
+
+  // Track conflict frequency (also logs a warning after 2+ consecutive conflicts)
+  trackConflict(sourceFeatureId, targetFeatureId)
+
+  emit({
+    type: 'conflict_detected',
+    sourceFeatureId,
+    targetFeatureId,
+    conflictingFiles: resolution.conflictingFiles,
+  })
+
+  if (resolution.success) {
+    // 3-way merge applied cleanly — no sequential retry needed
+    return true
+  }
+
+  // Still conflicted — caller must queue for sequential retry
+  return false
 }
 
 /**
