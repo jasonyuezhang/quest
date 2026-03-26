@@ -1,6 +1,6 @@
 {
   "featureId": "project-setup-1",
-  "commitSha": "placeholder",
+  "commitSha": "f567854",
   "testsPassed": true,
   "notes": "Project structure already established with api/server.js (Express server), src/ directory for TypeScript sources, and node_modules installed. Development server starts cleanly and responds to health checks on port 3000.",
   "completedAt": "2026-03-26T12:34:00.000Z",
