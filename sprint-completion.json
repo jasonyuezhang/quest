@@ -3,6 +3,6 @@
   "commitSha": "7e886f2",
   "testsPassed": true,
   "notes": "The quest init <dir> command is implemented in src/cli.ts and src/scaffold.ts. It creates init.sh (executable bash script), features.json (with 15 placeholder features satisfying the ≥10 requirement), and claude-progress.txt (valid JSON) in the target directory, prints a confirmation message to stdout, and exits with code 0.",
-  "completedAt": "2026-03-26T09:10:00.000Z",
-  "sessionId": "context-reset-1"
+  "completedAt": "2026-03-26T09:07:45.000Z",
+  "sessionId": "context-reset-3"
 }
