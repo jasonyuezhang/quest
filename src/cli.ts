@@ -811,4 +811,26 @@ configCmd
     console.log()
   })
 
+// ── quest rollback <feature-id> ──────────────────────────────────────────────
+
+program
+  .command('rollback <feature-id>')
+  .description('Revert the implementation commit for a feature and re-queue it for re-implementation')
+  .argument('[regressor-feature-id]', 'Optional: the feature that caused the regression (also re-queued)')
+  .option('-d, --project-dir <dir>', 'Project directory (default: cwd)')
+  .action(async (featureId: string, regressorId: string | undefined, opts: { projectDir?: string }) => {
+    const projectDir = resolve(opts.projectDir ?? process.cwd())
+    const orch = new Orchestrator({ projectDir })
+    try {
+      await orch.rollbackFeature(featureId, regressorId)
+      console.log(chalk.green(`✓ Rolled back feature: ${featureId}`))
+      if (regressorId && regressorId !== featureId) {
+        console.log(chalk.yellow(`  Also re-queued regressor: ${regressorId}`))
+      }
+    } catch (err) {
+      console.error(chalk.red('Rollback failed:'), err instanceof Error ? err.message : err)
+      process.exit(1)
+    }
+  })
+
 program.parse()

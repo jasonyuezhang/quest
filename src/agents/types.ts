@@ -24,6 +24,15 @@ export interface Feature {
   implementedAt?: string
   /** Session ID of the coder that implemented it */
   sessionId?: string
+  /**
+   * If set, this feature was created by refining another feature.
+   * For splits: contains the parent feature ID.
+   * For merges: contains a comma-separated list of merged feature IDs.
+   * For reorders: contains the original feature ID (same as current ID).
+   */
+  refinedFrom?: string
+  /** How this feature was created during refinement */
+  refinedAction?: 'split' | 'merge' | 'reorder'
 }
 
 /** Top-level shape of features.json */
@@ -176,6 +185,8 @@ export interface ProgressState {
   lastSessionId: string | null
   lastUpdated: string
   contextResets: number
+  /** Maps feature ID → commit SHA that implemented it (used for rollback) */
+  featureCommitShas?: Record<string, string>
 }
 
 /** Result from a parallel worker implementing a feature */

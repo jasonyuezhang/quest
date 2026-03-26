@@ -11,7 +11,7 @@ import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
 import { runReviewerAgent, readReviewReport } from './agents/reviewer.js'
 import { ContextManager } from './context/manager.js'
-import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
+import { readFeaturesFile, writeFeaturesFile, getNextFeature, countPassing } from './state/features.js'
 import { readProgress, writeProgress, createInitialProgress } from './state/progress.js'
 import {
   buildSprintContract,
@@ -1078,11 +1078,17 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         try {
           const progress = await readProgress(projectDir)
           const featuresData = await readFeaturesFile(projectDir)
+          const commitSha = await this.getCurrentSha()
+          const featureCommitShas = { ...(progress.featureCommitShas ?? {}) }
+          if (commitSha) {
+            featureCommitShas[feature.id] = commitSha
+          }
           await writeProgress(projectDir, {
             ...progress,
             passedFeatures: countPassing(featuresData.features),
             currentFeatureId: null,
             lastSessionId: evalResult.sessionId,
+            featureCommitShas,
           })
         } catch {
           // non-fatal
@@ -1233,6 +1239,75 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
   private async markFeatureSkipped(feature: Feature): Promise<void> {
     // For now, skip silently — the feature remains passes:false and will be retried
     // on next run. A more sophisticated harness could mark it as "skip" permanently.
+  }
+
+  /**
+   * Roll back a previously implemented feature by reverting its commit.
+   *
+   * Creates a revert commit with message:
+   *   'revert: rollback <feature-name> due to regression'
+   *
+   * Marks the rolled-back feature (and optionally the regressor) as passes:false.
+   */
+  async rollbackFeature(rollbackFeatureId: string, regressorFeatureId?: string): Promise<void> {
+    const { projectDir } = this.opts
+
+    // Load features and find the target feature
+    const featuresData = await readFeaturesFile(projectDir)
+    const feature = featuresData.features.find(f => f.id === rollbackFeatureId)
+    if (!feature) {
+      throw new Error(`Feature not found: ${rollbackFeatureId}`)
+    }
+
+    // Load progress and find the commit SHA
+    const progress = await readProgress(projectDir)
+    const sha = progress.featureCommitShas?.[rollbackFeatureId]
+    if (!sha) {
+      throw new Error(`No commit SHA recorded for feature: ${rollbackFeatureId}`)
+    }
+
+    // Perform the git revert (without auto-commit so we can set the message)
+    try {
+      await execAsync(`git revert ${sha} --no-commit`, { cwd: projectDir })
+    } catch (err) {
+      // Abort the revert to leave a clean state
+      try {
+        await execAsync('git revert --abort', { cwd: projectDir })
+      } catch {
+        // best-effort abort
+      }
+      throw new Error(`Failed to revert commit ${sha}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // Commit with the prescribed message format
+    await execAsync(
+      `git commit -m "revert: rollback ${feature.name} due to regression"`,
+      { cwd: projectDir },
+    )
+
+    // Mark rolled-back feature as passes:false
+    const featureIds = new Set([rollbackFeatureId])
+    if (regressorFeatureId && regressorFeatureId !== rollbackFeatureId) {
+      featureIds.add(regressorFeatureId)
+    }
+
+    for (const fid of featureIds) {
+      const f = featuresData.features.find(x => x.id === fid)
+      if (f) {
+        f.passes = false
+      }
+    }
+    await writeFeaturesFile(projectDir, featuresData)
+
+    // Remove the commit SHA for the rolled-back feature from progress
+    const updatedShas = { ...(progress.featureCommitShas ?? {}) }
+    delete updatedShas[rollbackFeatureId]
+
+    await writeProgress(projectDir, {
+      ...progress,
+      passedFeatures: countPassing(featuresData.features),
+      featureCommitShas: updatedShas,
+    })
   }
 
   async getStatus(): Promise<{ passing: number; total: number; currentFeature: string | null }> {
