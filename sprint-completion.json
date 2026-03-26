@@ -1,6 +1,6 @@
 {
   "featureId": "cli-init-command-basic",
-  "commitSha": "abcc006",
+  "commitSha": "00305a2",
   "testsPassed": true,
   "notes": "The quest init command was already implemented in scaffold.ts, creating init.sh, features.json (with 15 placeholder features >= 10), and claude-progress.txt with valid JSON. The command exits with code 0 and prints a confirmation message to stdout.",
   "completedAt": "2026-03-26T08:52:00.000Z",
