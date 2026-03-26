@@ -1,8 +1,8 @@
 {
-  "featureId": "cli-init-command-basic",
-  "commitSha": "3c76ede",
+  "featureId": "project-setup-1",
+  "commitSha": "7ce9e84",
   "testsPassed": true,
-  "notes": "The quest init command creates init.sh (executable), features.json (with 15 features ≥ 10 required), and claude-progress.txt (valid JSON) in the target directory, prints a confirmation message to stdout, and exits with code 0. Implementation in src/cli.ts and src/scaffold.ts verified working end-to-end.",
+  "notes": "Project structure is in place with src/ containing TypeScript source files, node_modules with 61 packages installed, and init.sh successfully starts the harness without errors. All three acceptance criteria are satisfied.",
   "completedAt": "2026-03-26T09:30:00.000Z",
-  "sessionId": "context-reset-0"
+  "sessionId": "unknown"
 }
