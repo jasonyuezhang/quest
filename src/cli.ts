@@ -9,6 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8')) as { version: string }
 
 import { Orchestrator } from './orchestrator.js'
+import { createBasicScaffold } from './scaffold.js'
 import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
 import { readProgress } from './state/progress.js'
 import { runCoderAgent } from './agents/coder.js'
@@ -29,10 +30,10 @@ program
  */
 program
   .command('init [project-dir]')
-  .description('Initialize a project — runs interactive planning session then generates features')
+  .description('Initialize a project — generates scaffold files (init.sh, features.json, claude-progress.txt)')
   .option('-n, --project-name <name>', 'Project name (default: directory name)')
-  .option('-d, --description <description>', 'Seed description (planner will still ask follow-up questions)', '')
-  .option('--no-plan', 'Skip the interactive planning phase and use --description directly')
+  .option('-d, --description <description>', 'Project description for feature generation', '')
+  .option('--plan', 'Run interactive planning session before generating features')
   .action(async (projectDirArg: string | undefined, opts: { projectName?: string; description: string; plan: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
@@ -51,8 +52,11 @@ program
         const plan = await runPlanningSession(opts.description || undefined)
         await orch.initialize(plan.featureGenerationContext, plan.projectName, plan)
       } else {
-        // --no-plan: use description directly, skip conversation
-        await orch.initialize(opts.description, projectName)
+        // Default: create scaffold files directly (no AI agent required)
+        await createBasicScaffold(projectDir, projectName)
+        console.log(chalk.green(`✓ Initialized project "${projectName}" in ${projectDir}`))
+        console.log(chalk.gray('  Created: init.sh, features.json, claude-progress.txt'))
+        console.log(chalk.gray('  Run `quest run` to start implementing features.'))
       }
     } catch (err) {
       console.error(chalk.red('Initialization failed:'), err instanceof Error ? err.message : err)
@@ -71,14 +75,16 @@ program
   .description('Run the full orchestration loop (init if needed, then implement features)')
   .option('-n, --max-features <n>', 'Stop after N features', (v) => parseInt(v, 10), Infinity)
   .option('-r, --retry-limit <n>', 'Max retries per failed feature', (v) => parseInt(v, 10), 2)
+  .option('-c, --concurrency <n>', 'Number of features to implement in parallel (default: 1)', (v) => parseInt(v, 10), 1)
   .option('--max-resets <n>', 'Max context resets per feature before giving up', (v) => parseInt(v, 10), 5)
   .option('--dry-run', 'Print plan without running agents', false)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxResets: number; dryRun: boolean }) => {
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; concurrency: number; maxResets: number; dryRun: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
     const orch = new Orchestrator({
       projectDir,
       maxFeatures: opts.maxFeatures,
       retryLimit: opts.retryLimit,
+      concurrency: opts.concurrency,
       maxContextResets: opts.maxResets,
       dryRun: opts.dryRun,
     })
@@ -100,9 +106,10 @@ program
   .command('resume [project-dir]')
   .description('Resume the orchestration loop from last known progress')
   .option('-n, --max-features <n>', 'Stop after N more features', (v) => parseInt(v, 10), Infinity)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number }) => {
+  .option('-c, --concurrency <n>', 'Number of features to implement in parallel (default: 1)', (v) => parseInt(v, 10), 1)
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; concurrency: number }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
-    const orch = new Orchestrator({ projectDir, maxFeatures: opts.maxFeatures })
+    const orch = new Orchestrator({ projectDir, maxFeatures: opts.maxFeatures, concurrency: opts.concurrency })
 
     try {
       await orch.resume()
