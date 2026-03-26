@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8')) as { version: string }
 
+import { mkdir } from 'node:fs/promises'
 import { Orchestrator } from './orchestrator.js'
 import { createBasicScaffold } from './scaffold.js'
 import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
@@ -37,9 +38,9 @@ program
   .action(async (projectDirArg: string | undefined, opts: { projectName?: string; description: string; plan: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
+    // Create directory if it doesn't exist
     if (!existsSync(projectDir)) {
-      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
-      process.exit(1)
+      await mkdir(projectDir, { recursive: true })
     }
 
     const projectName = opts.projectName ?? basename(projectDir)
