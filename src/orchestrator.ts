@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import chalk from 'chalk'
 
 import type { Feature, OrchestratorOptions, ProgressState } from './agents/types.js'
+import type { ProjectPlan } from './planner.js'
 import { runInitializerAgent } from './agents/initializer.js'
 import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
@@ -42,7 +43,7 @@ export class Orchestrator {
    * Run the initializer agent to set up the project scaffold.
    * Called once when init.sh does not exist.
    */
-  async initialize(projectDescription: string, projectName: string): Promise<void> {
+  async initialize(projectDescription: string, projectName: string, plan?: ProjectPlan): Promise<void> {
     const { projectDir, dryRun } = this.opts
     const initSh = join(projectDir, 'init.sh')
 
@@ -57,10 +58,13 @@ export class Orchestrator {
     }
 
     initEventLog(projectDir)
-    printAgentBanner('init', 1, 1, projectName)
+    // If a plan was produced by the planner, use its rich context for feature generation
+    const effectiveName = plan?.projectName ?? projectName
+    const effectiveDescription = plan?.featureGenerationContext ?? projectDescription
+    printAgentBanner('init', 1, 1, effectiveName)
 
     const ctxMgr = new ContextManager()
-    const result = await runInitializerAgent(projectDir, projectDescription, projectName, ctxMgr)
+    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr)
 
     if (!result.success) {
       throw new Error(`Initializer failed: ${result.error}`)

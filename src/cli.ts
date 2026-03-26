@@ -29,10 +29,11 @@ program
  */
 program
   .command('init [project-dir]')
-  .description('Initialize a project with the Quest harness (creates init.sh, features.json, claude-progress.txt)')
+  .description('Initialize a project — runs interactive planning session then generates features')
   .option('-n, --project-name <name>', 'Project name (default: directory name)')
-  .option('-d, --description <description>', 'Project description for feature generation', '')
-  .action(async (projectDirArg: string | undefined, opts: { projectName?: string; description: string }) => {
+  .option('-d, --description <description>', 'Seed description (planner will still ask follow-up questions)', '')
+  .option('--no-plan', 'Skip the interactive planning phase and use --description directly')
+  .action(async (projectDirArg: string | undefined, opts: { projectName?: string; description: string; plan: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     if (!existsSync(projectDir)) {
@@ -44,7 +45,15 @@ program
     const orch = new Orchestrator({ projectDir })
 
     try {
-      await orch.initialize(opts.description, projectName)
+      if (opts.plan) {
+        // Interactive planning phase — Claude asks questions until human approves
+        const { runPlanningSession } = await import('./planner.js')
+        const plan = await runPlanningSession(opts.description || undefined)
+        await orch.initialize(plan.featureGenerationContext, plan.projectName, plan)
+      } else {
+        // --no-plan: use description directly, skip conversation
+        await orch.initialize(opts.description, projectName)
+      }
     } catch (err) {
       console.error(chalk.red('Initialization failed:'), err instanceof Error ? err.message : err)
       process.exit(1)
