@@ -2,5 +2,17 @@ node_modules/
 dist/
 *.js.map
 *.d.ts.map
+
+# Quest runtime artifacts
 .quest-workers/
-.quest/transcripts/
+.quest/
+quest-events.jsonl
+
+# Coverage reports
+coverage/
+
+# OS files
+.DS_Store
+
+# Claude Code worktrees
+.claude/worktrees/
