@@ -20,6 +20,7 @@ import {
   writeSprintCompletion,
 } from './sprint/contracts.js'
 import { printAgentBanner } from './logger.js'
+import { initEventLog, emit } from './events.js'
 
 const execAsync = promisify(exec)
 
@@ -55,6 +56,7 @@ export class Orchestrator {
       return
     }
 
+    initEventLog(projectDir)
     printAgentBanner('init', 1, 1, projectName)
 
     const ctxMgr = new ContextManager()
@@ -78,6 +80,9 @@ export class Orchestrator {
    */
   async run(): Promise<void> {
     const { projectDir, maxFeatures, dryRun } = this.opts
+    const runStart = Date.now()
+
+    initEventLog(projectDir)
 
     let implemented = 0
     let failed = 0
@@ -88,6 +93,8 @@ export class Orchestrator {
 
       if (!next) {
         console.log(chalk.green('\n✅ All features implemented!'))
+        const total = featuresData.features.length
+        emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart })
         break
       }
 
@@ -99,6 +106,7 @@ export class Orchestrator {
           chalk.gray(` [${next.priority}]`),
       )
       console.log(chalk.gray(`  ${next.description}`))
+      emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
 
       if (dryRun) {
         console.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
@@ -114,9 +122,9 @@ export class Orchestrator {
       } else {
         failed++
         console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
-        // Skip this feature and move on (retry logic is inside implementFeature)
         await this.markFeatureSkipped(next)
       }
+      emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0 })
     }
 
     const summary = await this.getStatus()
@@ -224,6 +232,7 @@ export class Orchestrator {
           `  evaluator: ${(evalResult.durationMs / 1000).toFixed(1)}s — verdict: ${verdictStr}`,
         ),
       )
+      emit({ type: 'eval_verdict', featureId: feature.id, verdict: report.verdict, criteriaResults: report.criteriaResults })
 
       if (report.verdict === 'pass') {
         // Evaluator already set passes:true in features.json
@@ -284,6 +293,7 @@ export class Orchestrator {
         if (isReset) {
           console.log(chalk.yellow(`\n  ↺ Context reset #${resetCount}/${maxContextResets} — starting fresh session`))
           printAgentBanner('coder', 1, 2, `${feature.id} (context reset #${resetCount})`)
+          emit({ type: 'context_reset', featureId: feature.id, resetCount })
           resetPrompt = await ctxMgr.buildHandoffPrompt(
             projectDir,
             feature,

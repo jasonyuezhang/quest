@@ -1,5 +1,6 @@
 import chalk from 'chalk'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { emit, setCurrentAgent } from './events.js'
 
 /** Emoji + color for each tool name */
 const TOOL_DISPLAY: Record<string, { icon: string; color: (s: string) => string }> = {
@@ -26,20 +27,17 @@ function summarizeInput(toolName: string, input: unknown): string {
   if (!input || typeof input !== 'object') return ''
   const inp = input as Record<string, unknown>
 
-  // Bash: show the command (truncated)
   if (toolName === 'Bash') {
     const cmd = String(inp['command'] ?? inp['cmd'] ?? '').replace(/\n/g, ' ')
     return cmd.length > 80 ? cmd.slice(0, 80) + '…' : cmd
   }
 
-  // File tools: show the path
   const path = inp['file_path'] ?? inp['path'] ?? inp['pattern'] ?? inp['query'] ?? inp['url']
   if (path) {
     const s = String(path)
     return s.length > 60 ? '…' + s.slice(-60) : s
   }
 
-  // Fallback: first string value
   const firstStr = Object.values(inp).find(v => typeof v === 'string')
   if (firstStr) {
     const s = String(firstStr)
@@ -58,10 +56,13 @@ const AGENT_LABEL: Record<AgentLabel, string> = {
 }
 
 let turnCount = 0
+let currentAgentLabel: AgentLabel | undefined
+let agentStartTime = Date.now()
 
 /** Reset turn counter at the start of each agent session */
 export function resetTurnCount() {
   turnCount = 0
+  agentStartTime = Date.now()
 }
 
 /** Print a section header banner when an agent phase begins */
@@ -89,18 +90,20 @@ export function printAgentBanner(
   process.stdout.write(`\n${chalk.gray(line)}\n`)
   process.stdout.write(`${stepStr} ${color(name)}${detailStr}\n`)
   process.stdout.write(`${chalk.gray(line)}\n`)
+
+  setCurrentAgent(agent)
+  currentAgentLabel = agent
 }
 
 /**
  * Log progress from an SDK message.
- * Call this inside the `for await (const message of query(...))` loop.
+ * Also emits structured events to the event log for the monitor TUI.
  */
 export function logMessage(agent: AgentLabel, message: SDKMessage): void {
   const prefix = `${AGENT_LABEL[agent]} `
 
   if (message.type === 'assistant') {
     turnCount++
-    // Log each tool call in the assistant message content
     for (const block of message.message.content) {
       if (block.type === 'tool_use') {
         const { icon, color } = toolDisplay(block.name)
@@ -109,37 +112,49 @@ export function logMessage(agent: AgentLabel, message: SDKMessage): void {
         const summaryStr = summary ? chalk.gray(` ${summary}`) : ''
         const turnStr = chalk.gray(` t${turnCount}`)
         process.stdout.write(`${prefix}${icon} ${toolStr}${summaryStr}${turnStr}\n`)
+
+        emit({ type: 'tool_use', agent, tool: block.name, summary, turn: turnCount })
       }
     }
   }
 
   if (message.type === 'tool_progress') {
-    // Tool is running (long-running Bash commands, etc.)
     const elapsed = message.elapsed_time_seconds.toFixed(1)
     const { icon, color } = toolDisplay(message.tool_name)
     process.stdout.write(
       `${prefix}${icon} ${color(message.tool_name)} ${chalk.gray(`${elapsed}s…`)}\n`
     )
+    emit({ type: 'tool_progress', agent, tool: message.tool_name, elapsedSeconds: message.elapsed_time_seconds })
   }
 
   if (message.type === 'result') {
-    const tokens = (() => {
-      const key = Object.keys(message.modelUsage)[0]
-      if (!key) return ''
-      const u = message.modelUsage[key]
-      if (!u) return ''
-      return chalk.gray(` (${u.inputTokens}↑ ${u.outputTokens}↓ tokens)`)
-    })()
+    const modelKey = Object.keys(message.modelUsage)[0]
+    const usage = modelKey ? message.modelUsage[modelKey] : undefined
+
+    const tokens = usage
+      ? chalk.gray(` (${usage.inputTokens}↑ ${usage.outputTokens}↓ tokens)`)
+      : ''
 
     if (message.is_error) {
       process.stdout.write(`${prefix}${chalk.red('✗ error')}${tokens}\n`)
     } else {
       process.stdout.write(`${prefix}${chalk.green('✓ done')} — ${turnCount} turns${tokens}\n`)
     }
+
+    emit({
+      type: 'agent_done',
+      agent,
+      turns: turnCount,
+      durationMs: Date.now() - agentStartTime,
+      success: !message.is_error,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+    })
   }
 
   if (message.type === 'system' && message.subtype === 'init') {
     turnCount = 0
     process.stdout.write(`${prefix}${chalk.gray('session started')}\n`)
+    emit({ type: 'agent_start', agent })
   }
 }

@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import { program } from 'commander'
 import chalk from 'chalk'
-import { resolve, basename } from 'node:path'
-import { existsSync } from 'node:fs'
+import { resolve, basename, dirname } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8')) as { version: string }
 
 import { Orchestrator } from './orchestrator.js'
 import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
@@ -15,7 +19,7 @@ import { buildSprintContract, writeSprintContract, readEvalReport } from './spri
 program
   .name('quest')
   .description('Coding agent harness — implements features using Claude agents')
-  .version('0.1.0')
+  .version(pkg.version)
 
 /**
  * quest init [project-dir]
@@ -239,6 +243,30 @@ program
       ),
     )
     console.log(chalk.yellow('Note: evaluator not run — use quest eval to verify'))
+  })
+
+/**
+ * quest monitor [project-dir]
+ *
+ * Live TUI dashboard showing agent activity and feature history.
+ * Run in a separate terminal while `quest run` is executing.
+ *
+ * Historical runs: replays quest-events.jsonl from the project directory.
+ * Live updates: polls quest-events.jsonl every 500ms for new events.
+ */
+program
+  .command('monitor [project-dir]')
+  .description('Live TUI dashboard — shows agent activity, tool calls, and feature history')
+  .action(async (projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    if (!existsSync(projectDir)) {
+      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
+      process.exit(1)
+    }
+
+    const { renderMonitor } = await import('./tui/monitor.js')
+    renderMonitor(projectDir)
   })
 
 program.parse()
