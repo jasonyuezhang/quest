@@ -195,9 +195,10 @@ program
   .option('--no-transcripts', 'Disable session transcript capture to save disk space', false)
   .option('--skip-regression', 'Skip regression checks in evaluator for speed during development', false)
   .option('--tdd', 'Enable Test-Driven Development mode: coder writes failing tests first, then implements (red-green-refactor)', false)
+  .option('--no-evidence', 'Disable evidence capture (screenshots, console/network errors) to speed up evaluation', false)
   .option('--coder-model <model>', 'Model to use for the coder agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
   .option('--evaluator-model <model>', 'Model to use for the evaluator agent (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)')
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; coderModel?: string; evaluatorModel?: string }) => {
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
     // Validate models if provided
@@ -236,6 +237,7 @@ program
       noTranscripts: opts.noTranscripts,
       skipRegression: opts.skipRegression,
       tdd: opts.tdd,
+      noEvidence: !opts.evidence,
       coderModel: opts.coderModel,
       evaluatorModel: opts.evaluatorModel,
     })
@@ -449,12 +451,28 @@ program
         console.log(`          ${next.description}`)
       }
 
+      // Show refined features section (features created by quest refine)
+      const refinedFeatures = featuresData.features.filter(f => f.refinedFrom !== undefined)
+      if (refinedFeatures.length > 0) {
+        console.log(`\nRefined (${refinedFeatures.length}):`)
+        for (const f of refinedFeatures) {
+          const icon = f.passes ? chalk.green('✓') : chalk.gray('○')
+          const actionColor =
+            f.refinedAction === 'split' ? chalk.yellow :
+            f.refinedAction === 'merge' ? chalk.cyan :
+            chalk.magenta
+          const action = actionColor(f.refinedAction ?? 'refined')
+          console.log(`  ${icon} ${f.id} ${chalk.gray('←')} ${action} from ${chalk.gray(f.refinedFrom)}`)
+        }
+      }
+
       if (opts.showAll) {
         console.log('\nAll features:')
         for (const f of featuresData.features) {
           const icon = f.passes ? chalk.green('✓') : chalk.gray('○')
           const pri = f.priority === 'high' ? chalk.red(f.priority) : f.priority === 'medium' ? chalk.yellow(f.priority) : chalk.gray(f.priority)
-          console.log(`  ${icon} [${pri}] ${f.id}`)
+          const refinedTag = f.refinedFrom ? chalk.gray(` [${f.refinedAction ?? 'refined'} from ${f.refinedFrom}]`) : ''
+          console.log(`  ${icon} [${pri}] ${f.id}${refinedTag}`)
         }
       } else if (pending.length > 0) {
         console.log(`\nPending (${pending.length}):`)
@@ -482,13 +500,18 @@ program
 program
   .command('eval <feature-id> [project-dir]')
   .description('Run the evaluator for a specific feature (useful for debugging)')
-  .action(async (featureId: string, projectDirArg: string | undefined) => {
+  .option('--no-evidence', 'Disable evidence capture (screenshots, console/network errors) to speed up evaluation', false)
+  .action(async (featureId: string, projectDirArg: string | undefined, opts: { evidence: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+    const noEvidence = !opts.evidence
 
     console.log(chalk.blue(`Evaluating: ${featureId}`))
+    if (noEvidence) {
+      console.log(chalk.gray('  Evidence capture disabled (--no-evidence)'))
+    }
 
     const ctxMgr = new ContextManager()
-    const result = await runEvaluatorAgent(projectDir, featureId, ctxMgr)
+    const result = await runEvaluatorAgent(projectDir, featureId, ctxMgr, undefined, { noEvidence })
 
     if (!result.success) {
       console.error(chalk.red('Evaluator failed:'), result.error)
@@ -653,6 +676,50 @@ program
       const agentPart = parts.find(p => agentLabels.includes(p)) ?? 'unknown'
 
       console.log('\n' + formatTranscript(transcriptPath, featureIdOrSessionId, agentPart) + '\n')
+
+      // Show evidence (screenshots and error logs) if available
+      const evidenceDir = resolve(projectDir, '.quest', 'evidence', featureIdOrSessionId)
+      if (existsSync(evidenceDir)) {
+        const { readdirSync } = await import('node:fs')
+        const files = readdirSync(evidenceDir)
+        if (files.length > 0) {
+          console.log(chalk.bold(`\nEvidence: .quest/evidence/${featureIdOrSessionId}/`))
+          for (const file of files.sort()) {
+            const filePath = resolve(evidenceDir, file)
+            if (file.endsWith('.png') || file.endsWith('.jpg')) {
+              console.log(chalk.cyan(`  📷 ${file}`) + chalk.gray(` — ${filePath}`))
+            } else if (file.endsWith('.json') || file.endsWith('.txt') || file.endsWith('.log')) {
+              const { readFileSync } = await import('node:fs')
+              const content = readFileSync(filePath, 'utf-8')
+              console.log(chalk.yellow(`  📋 ${file}:`))
+              console.log(chalk.gray(content.split('\n').map(l => `    ${l}`).join('\n')))
+            } else {
+              console.log(chalk.gray(`  ${file}`))
+            }
+          }
+          console.log()
+        }
+      }
+
+      // Also show consoleErrors and networkErrors from eval-report.json if available
+      const evalReport = await readEvalReport(projectDir)
+      if (evalReport && evalReport.featureId === featureIdOrSessionId) {
+        if (evalReport.consoleErrors && evalReport.consoleErrors.length > 0) {
+          console.log(chalk.bold('Console Errors:'))
+          for (const err of evalReport.consoleErrors) {
+            console.log(chalk.red(`  ✗ ${err}`))
+          }
+          console.log()
+        }
+        if (evalReport.networkErrors && evalReport.networkErrors.length > 0) {
+          console.log(chalk.bold('Network Errors:'))
+          for (const err of evalReport.networkErrors) {
+            console.log(chalk.red(`  ✗ ${err}`))
+          }
+          console.log()
+        }
+      }
+
       return
     }
 
@@ -696,6 +763,14 @@ program
     } else {
       console.log(chalk.green(`✓ Removed ${count} transcript${count === 1 ? '' : 's'} from .quest/transcripts/`))
     }
+
+    // Also clean up evidence directory
+    const evidenceDir = resolve(projectDir, '.quest', 'evidence')
+    if (existsSync(evidenceDir)) {
+      const { rmSync } = await import('node:fs')
+      rmSync(evidenceDir, { recursive: true, force: true })
+      console.log(chalk.green(`✓ Removed evidence directory .quest/evidence/`))
+    }
   })
 
 /**
@@ -731,6 +806,45 @@ program
       console.log(chalk.green(`✓ Report written to: ${reportPath}`))
     } catch (err) {
       console.error(chalk.red('Report generation failed:'), err instanceof Error ? err.message : err)
+      process.exit(1)
+    }
+  })
+
+/**
+ * quest refine [project-dir]
+ *
+ * Launch an interactive feature refinement session using the current features.json.
+ * Uses Claude to analyse the feature list and failure patterns, then suggests:
+ *   - Splitting large features into focused sub-features (parent ID as prefix)
+ *   - Merging small related features (combining acceptance criteria)
+ *   - Reordering priorities based on failure patterns
+ *
+ * Passing features (passes:true) are never modified.
+ */
+program
+  .command('refine [project-dir]')
+  .description('Iteratively refine the feature list: split, merge, and reorder features using AI analysis')
+  .option('--non-interactive', 'Apply refinements without asking for confirmation', false)
+  .action(async (projectDirArg: string | undefined, opts: { nonInteractive: boolean }) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    if (!existsSync(projectDir)) {
+      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
+      process.exit(1)
+    }
+
+    const featuresPath = resolve(projectDir, 'features.json')
+    if (!existsSync(featuresPath)) {
+      console.error(chalk.red(`No features.json found in: ${projectDir}`))
+      console.error(chalk.gray('Run quest init first to generate features.'))
+      process.exit(1)
+    }
+
+    try {
+      const { runRefinementSession } = await import('./refiner.js')
+      await runRefinementSession(projectDir, { nonInteractive: opts.nonInteractive })
+    } catch (err) {
+      console.error(chalk.red('Refinement failed:'), err instanceof Error ? err.message : err)
       process.exit(1)
     }
   })
@@ -830,6 +944,47 @@ program
     } catch (err) {
       console.error(chalk.red('Rollback failed:'), err instanceof Error ? err.message : err)
       process.exit(1)
+    }
+  })
+
+/**
+ * quest plugin list [project-dir]
+ *
+ * List installed plugins from .quest/plugins/ and show their hooks.
+ */
+const pluginCmd = program
+  .command('plugin')
+  .description('Manage Quest plugins')
+
+pluginCmd
+  .command('list [project-dir]')
+  .description('List installed plugins from .quest/plugins/ and show their lifecycle hooks')
+  .action(async (projectDirArg: string | undefined) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { PluginManager } = await import('./plugins.js')
+    const mgr = new PluginManager(projectDir)
+    await mgr.load()
+    const plugins = mgr.getPlugins()
+
+    if (plugins.length === 0) {
+      console.log(chalk.gray('\nNo plugins installed.'))
+      console.log(chalk.gray(`  Place .js or .ts files in ${projectDir}/.quest/plugins/ to install plugins.`))
+      console.log(chalk.gray('  See docs/slack-notification-plugin.js for an example.'))
+      return
+    }
+
+    console.log(chalk.bold(`\nInstalled Plugins (${plugins.length})\n`))
+    for (const { plugin, file } of plugins) {
+      console.log(`  ${chalk.cyan(plugin.name)}  ${chalk.gray(`(${file})`)}`)
+      if (plugin.description) {
+        console.log(`    ${chalk.gray(plugin.description)}`)
+      }
+      if (plugin.hooks.length > 0) {
+        console.log(`    Hooks: ${plugin.hooks.map(h => chalk.yellow(h)).join(', ')}`)
+      } else {
+        console.log(`    ${chalk.gray('No hooks registered')}`)
+      }
+      console.log()
     }
   })
 

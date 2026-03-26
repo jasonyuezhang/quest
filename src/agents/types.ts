@@ -159,6 +159,10 @@ export interface EvalReport {
   failureCategory?: string
   /** Regressions detected in previously passing features (blocks pass even if verdict is 'pass') */
   regressions?: RegressionResult[]
+  /** Browser console errors captured during evaluation (only set when evidence capture is enabled) */
+  consoleErrors?: string[]
+  /** Network request failures (4xx/5xx) captured during evaluation (only set when evidence capture is enabled) */
+  networkErrors?: string[]
 }
 
 /** What an agent session produces (returned to orchestrator) */
@@ -247,4 +251,10 @@ export interface OrchestratorOptions {
   skipRegression?: boolean
   /** Enable TDD mode: coder writes failing tests first, then implements to make them pass (default: false) */
   tdd?: boolean
+  /** Disable evidence capture (screenshots, console/network errors) to speed up evaluation (default: false) */
+  noEvidence?: boolean
+  /** Webhook URL to POST feature_done and run_complete events to */
+  webhookUrl?: string
+  /** Notification channel — currently only 'slack' is supported */
+  notify?: string
 }

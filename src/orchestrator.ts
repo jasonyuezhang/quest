@@ -26,7 +26,7 @@ import { classifyFailure } from './failure-classifier.js'
 import type { FailureCategory } from './failure-classifier.js'
 import { printAgentBanner } from './logger.js'
 import { initEventLog, emit, readEvents } from './events.js'
-import { computeRunCost } from './cost.js'
+import { computeRunCost, computeFeatureCost } from './cost.js'
 import {
   createWorktree,
   removeWorktree,
@@ -47,6 +47,8 @@ import {
 import { Tracer } from './trace.js'
 import { AgentGit } from './agent-git/index.js'
 import { TranscriptCapture } from './transcript.js'
+import { PluginManager } from './plugins.js'
+import { notifyFeatureDone, notifyRunComplete, type FeatureDonePayload, type RunCompletePayload } from './webhook.js'
 
 const execAsync = promisify(exec)
 
@@ -97,9 +99,10 @@ class WorkerPool {
 // ---------------------------------------------------------------------------
 
 export class Orchestrator {
-  private opts: Required<Omit<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd'>> & Pick<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd'>
+  private opts: Required<Omit<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>> & Pick<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>
   private tracer: Tracer
   private agentGit: AgentGit
+  readonly pluginManager: PluginManager
 
   /** Set to true when SIGINT/SIGTERM is received — stops dispatching new work */
   shutdownRequested = false
@@ -136,6 +139,7 @@ export class Orchestrator {
     }
     this.tracer = new Tracer(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
+    this.pluginManager = new PluginManager(opts.projectDir)
   }
 
   /** Load model config from .quest/config.json */
@@ -373,6 +377,17 @@ export class Orchestrator {
     await this.runInitSh()
     await this.agentGit.init()
 
+    // Load plugins from .quest/plugins/ and fire onRunStart hook
+    await this.pluginManager.load()
+    {
+      const featuresDataForRunStart = await readFeaturesFile(projectDir)
+      await this.pluginManager.onRunStart({
+        projectDir,
+        totalFeatures: featuresDataForRunStart.features.length,
+        concurrency: maxConcurrency,
+      })
+    }
+
     this.registerShutdownHandlers()
 
     try {
@@ -403,6 +418,7 @@ export class Orchestrator {
           const total = featuresData.features.length
           const costSummary = computeRunCost(readEvents(projectDir))
           emit({ type: 'run_complete', passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
+          await this.pluginManager.onRunComplete({ projectDir, passing: countPassing(featuresData.features), total, durationMs: Date.now() - runStart, totalCostUsd: costSummary.totalCostUsd })
           break
         }
 
@@ -415,6 +431,7 @@ export class Orchestrator {
         )
         console.log(chalk.gray(`  ${next.description}`))
         emit({ type: 'feature_start', featureId: next.id, featureName: next.name, priority: next.priority, index: passing + 1, total })
+        await this.pluginManager.onFeatureStart({ projectDir, feature: next, index: passing + 1, total })
 
         if (dryRun) {
           console.log(chalk.gray(`  [dry-run] Would implement: ${next.id}`))
@@ -422,7 +439,9 @@ export class Orchestrator {
           continue
         }
 
+        const featureStartMs = Date.now()
         const { verdict, failureCategory } = await this.implementFeature(next)
+        const featureDurationMs = Date.now() - featureStartMs
 
         // Check shutdown flag after implementFeature — the agent session has completed
         if (this.shutdownRequested) {
@@ -438,7 +457,20 @@ export class Orchestrator {
           console.log(chalk.red(`\n✗ ${next.id} failed after ${this.opts.retryLimit + 1} attempts`))
           await this.markFeatureSkipped(next)
         }
-        emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: 0, failureCategory })
+        emit({ type: 'feature_done', featureId: next.id, verdict, attempt: this.opts.retryLimit + 1, durationMs: featureDurationMs, failureCategory })
+        await this.pluginManager.onFeatureDone({ projectDir, featureId: next.id, featureName: next.name, verdict, attempt: this.opts.retryLimit + 1, durationMs: featureDurationMs, failureCategory })
+        {
+          const featureCost = computeFeatureCost(readEvents(projectDir), next.id)
+          const featureDonePayload: FeatureDonePayload = {
+            event: 'feature_done',
+            featureId: next.id,
+            verdict,
+            durationMs: featureDurationMs,
+            costEstimateUsd: featureCost,
+            errorSummary: failureCategory ?? (verdict === 'fail' ? 'Feature failed' : undefined),
+          }
+          await notifyFeatureDone(featureDonePayload, this.opts.webhookUrl, this.opts.notify)
+        }
       }
 
       const summary = await this.getStatus()
@@ -755,7 +787,7 @@ export class Orchestrator {
       const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
         featureId: feature.id, workerId: wId, model: evaluatorModel,
       })
-      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace, { noTranscripts: this.opts.noTranscripts, model: evaluatorModel })
+      const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace, { noTranscripts: this.opts.noTranscripts, model: evaluatorModel, noEvidence: this.opts.noEvidence })
       this.tracer.endSession(evalTrace)
 
       if (!evalResult.success) {
@@ -861,7 +893,9 @@ export class Orchestrator {
     const previouslyPassingIds = featuresDataForContract.features
       .filter(f => f.passes && f.id !== feature.id)
       .map(f => f.id)
-    const contract = buildSprintContract(feature, previouslyPassingIds, this.opts.skipRegression, this.opts.tdd)
+    let contract = buildSprintContract(feature, previouslyPassingIds, this.opts.skipRegression, this.opts.tdd)
+    // Allow plugins to modify the sprint contract before coder runs
+    contract = await this.pluginManager.modifySprintContract(contract, feature)
     await Promise.all([
       writeSprintContract(projectDir, contract),
       // Write current-feature.json so coder reads one feature, not all 200+
@@ -925,6 +959,7 @@ export class Orchestrator {
       //   timeout      → retry with extended max_turns (increase by 50%)
       printAgentBanner('coder', 1, totalSteps, `${feature.id}${attemptLabel}`)
       const coderResult = await this.runCoderWithResets(feature, retryHints)
+      await this.pluginManager.onAgentDone({ projectDir, featureId: feature.id, agentType: 'coder', success: coderResult.success, durationMs: coderResult.durationMs })
       if (!coderResult.success) {
         console.log(chalk.red(`✗ Coder failed: ${coderResult.error}`))
         continue
@@ -942,6 +977,17 @@ export class Orchestrator {
             `${coderResult.totalInputTokens}↑ tokens`,
         ),
       )
+
+      // Plugin custom agent steps — run between coder and evaluator
+      const customSteps = this.pluginManager.getCustomAgentSteps()
+      for (const step of customSteps) {
+        console.log(chalk.gray(`  plugin step: ${step.name}`))
+        try {
+          await step.run(projectDir, feature)
+        } catch (err) {
+          console.warn(chalk.yellow(`⚠ Plugin step "${step.name}" failed — ${err instanceof Error ? err.message : err}`))
+        }
+      }
 
       // Step 2 (optional): Run reviewer between coder and evaluator
       if (this.opts.review) {
@@ -1004,8 +1050,9 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
       const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
         featureId: feature.id, model: this.opts.evaluatorModel ?? this.opts.model,
       })
-      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts, model: this.opts.evaluatorModel ?? this.opts.model })
+      const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts, model: this.opts.evaluatorModel ?? this.opts.model, noEvidence: this.opts.noEvidence })
       this.tracer.endSession(evalTrace)
+      await this.pluginManager.onAgentDone({ projectDir, featureId: feature.id, agentType: 'evaluator', success: evalResult.success, durationMs: evalResult.durationMs })
 
       if (!evalResult.success) {
         console.log(chalk.red(`✗ Evaluator failed: ${evalResult.error}`))
@@ -1026,6 +1073,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         ),
       )
       emit({ type: 'eval_verdict', featureId: feature.id, verdict: report.verdict, criteriaResults: report.criteriaResults })
+      await this.pluginManager.onEvalVerdict({ projectDir, featureId: feature.id, verdict: report.verdict, criteriaResults: report.criteriaResults })
 
       // Check for regressions — even if verdict is "pass", regressions are a blocker
       if (report.regressions && report.regressions.length > 0) {

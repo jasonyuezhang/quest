@@ -57,6 +57,27 @@ When browserTestUrl is set in sprint-contract.json, use the Playwright MCP tools
 
 Test as a REAL USER would. Don't just check if elements exist — actually interact with them.
 
+## Evidence Capture on Failure
+
+When any acceptance criterion FAILS and evidence capture is enabled (see sprint-contract.json):
+
+1. **Screenshots**: Take a Playwright screenshot and save it to `.quest/evidence/<feature-id>/screenshot-<criterion-index>.png`
+   - Create the directory first: `mkdir -p .quest/evidence/<feature-id>/`
+   - Use Playwright MCP screenshot tool to capture the current page state
+
+2. **Console errors**: Before evaluating browser-based criteria, set up console error capture:
+   - Track any console.error or console.warn messages from the page
+   - Include these in eval-report.json under "consoleErrors" as an array of strings
+
+3. **Network failures**: Monitor for 4xx and 5xx responses during your tests:
+   - Capture the URL, status code, and response body (if available)
+   - Include these in eval-report.json under "networkErrors" as an array of strings
+   - Format each entry as: "STATUS URL" (e.g., "404 /api/users", "500 /api/login")
+
+Evidence helps developers debug failures quickly. When capturing:
+- Only capture evidence for FAILING criteria, not passing ones
+- Keep evidence minimal — one screenshot per failing page state is sufficient
+
 ## Decision Rules
 
 - ALL acceptance criteria must PASS to mark the feature complete
@@ -125,6 +146,8 @@ Write eval-report.json with this EXACT structure:
       "evidence": "<what failed: what you saw vs what you expected>"
     }
   ],
+  "consoleErrors": ["<console error message 1>", "<console error message 2>"],
+  "networkErrors": ["<STATUS URL 1>", "<STATUS URL 2>"],
   "notes": "<1-3 sentence summary of what you found>",
   "evaluatedAt": "<ISO timestamp>",
   "sessionId": "unknown"
@@ -132,6 +155,9 @@ Write eval-report.json with this EXACT structure:
 
 The "regressions" field is OPTIONAL — only include it if regressions were detected.
 If skipRegression is true in sprint-contract.json, skip all regression checks and omit the field.
+The "consoleErrors" field is OPTIONAL — only include it if console errors were captured.
+The "networkErrors" field is OPTIONAL — only include it if network failures were captured.
+Omit these fields (don't include empty arrays) if no errors were found.
 
 ## If Verdict is "pass"
 
@@ -157,10 +183,16 @@ export async function runEvaluatorAgent(
   featureId: string,
   contextManager: ContextManager,
   traceSession?: TraceSession | null,
-  options?: { noTranscripts?: boolean; model?: string },
+  options?: { noTranscripts?: boolean; model?: string; noEvidence?: boolean },
 ): Promise<AgentResult> {
   const startTime = Date.now()
   const model = options?.model ?? 'claude-sonnet-4-6'
+  const noEvidence = options?.noEvidence ?? false
+
+  // When evidence capture is disabled, append a note to the system prompt
+  const systemPrompt = noEvidence
+    ? EVALUATOR_SYSTEM_PROMPT + '\n\n## Evidence Capture Disabled\n\nEvidence capture has been disabled via --no-evidence flag. Do NOT take screenshots or capture console/network errors. Omit consoleErrors and networkErrors from eval-report.json.'
+    : EVALUATOR_SYSTEM_PROMPT
 
   const prompt = `Evaluate feature: ${featureId}
 
@@ -181,7 +213,7 @@ If verdict is "pass", also update features.json to set passes:true for this feat
       prompt,
       options: {
         cwd: projectDir,
-        systemPrompt: EVALUATOR_SYSTEM_PROMPT,
+        systemPrompt,
         allowedTools: ['Read', 'Write', 'Bash', 'Glob', 'Grep'],
         model,
         maxTurns: 60,
