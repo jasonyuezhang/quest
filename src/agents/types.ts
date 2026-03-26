@@ -71,6 +71,10 @@ export interface ContextHandoff {
   completedSteps: string[]
   remainingCriteria: string[]
   modifiedFiles: string[]
+  /** Recent git commits made during this feature's work (git log output) */
+  recentCommits: string
+  /** Diff stat of changes since the feature started (git diff --stat) */
+  diffStat: string
   partialNotes: string
   handoffAt: string
   resetCount: number
@@ -132,6 +136,8 @@ export interface OrchestratorOptions {
   maxFeatures?: number
   /** Max retries per failed feature (default: 2) */
   retryLimit?: number
+  /** Max context resets per feature before giving up (default: 5) */
+  maxContextResets?: number
   /** Print plan without running agents */
   dryRun?: boolean
   /** Override model for all agents */

@@ -7,6 +7,8 @@ const COMPLETION_FILE = 'sprint-completion.json'
 const COMPLETION_PARTIAL_FILE = 'sprint-completion-partial.json'
 const HANDOFF_FILE = 'sprint-context-handoff.json'
 const EVAL_REPORT_FILE = 'eval-report.json'
+/** Single-feature file so the coder doesn't have to scan all of features.json */
+const CURRENT_FEATURE_FILE = 'current-feature.json'
 
 /** Build a sprint contract from a feature's acceptance criteria */
 export function buildSprintContract(feature: Feature): SprintContract {
@@ -69,6 +71,15 @@ export async function readEvalReport(dir: string): Promise<EvalReport | null> {
   }
 }
 
+/**
+ * Write the current feature to current-feature.json.
+ * The coder reads this instead of scanning all 200+ entries in features.json,
+ * saving startup tokens for actual coding work.
+ */
+export async function writeCurrentFeature(dir: string, feature: Feature): Promise<void> {
+  await writeFile(join(dir, CURRENT_FEATURE_FILE), JSON.stringify(feature, null, 2) + '\n', 'utf-8')
+}
+
 /** Clean up sprint artifacts before starting a new feature */
 export async function cleanSprintArtifacts(dir: string): Promise<void> {
   const { unlink } = await import('node:fs/promises')
@@ -77,6 +88,7 @@ export async function cleanSprintArtifacts(dir: string): Promise<void> {
     COMPLETION_PARTIAL_FILE,
     HANDOFF_FILE,
     EVAL_REPORT_FILE,
+    CURRENT_FEATURE_FILE,
   ]
   await Promise.all(
     files.map(f =>

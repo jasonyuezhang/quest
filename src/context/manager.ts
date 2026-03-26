@@ -10,6 +10,15 @@ const CONTEXT_WINDOW_TOKENS = 200_000
 /** Trigger context reset at 75% of the context window */
 const RESET_THRESHOLD = Math.floor(CONTEXT_WINDOW_TOKENS * 0.75) // 150,000
 
+async function gitExec(cmd: string, cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execAsync(cmd, { cwd })
+    return stdout.trim()
+  } catch {
+    return ''
+  }
+}
+
 export class ContextManager {
   private totalInputTokens = 0
   private totalOutputTokens = 0
@@ -48,24 +57,46 @@ export class ContextManager {
     this.resetCount++
   }
 
-  /** Build a structured handoff prompt for the next fresh session */
+  /**
+   * Build a structured handoff prompt for the next fresh session.
+   *
+   * @param startingSha - the git SHA recorded before the coder started this attempt,
+   *   used to capture only commits made during this feature's work.
+   */
   async buildHandoffPrompt(
     projectDir: string,
     feature: Feature,
     completedSteps: string[],
     partialNotes: string,
+    startingSha?: string,
   ): Promise<string> {
     const remainingCriteria = feature.acceptanceCriteria.filter(
       c => !completedSteps.some(s => s.toLowerCase().includes(c.toLowerCase().slice(0, 20))),
     )
 
-    let modifiedFiles: string[] = []
-    try {
-      const { stdout } = await execAsync('git diff --name-only HEAD', { cwd: projectDir })
-      modifiedFiles = stdout.trim().split('\n').filter(Boolean)
-    } catch {
-      // git may not be initialized yet
-    }
+    // Get files changed since the feature started (both committed and uncommitted)
+    const [modifiedUncommitted, modifiedCommitted] = await Promise.all([
+      gitExec('git diff --name-only HEAD', projectDir),
+      startingSha
+        ? gitExec(`git diff --name-only ${startingSha}..HEAD`, projectDir)
+        : gitExec('git diff --name-only HEAD~3..HEAD', projectDir),
+    ])
+    const modifiedFiles = [
+      ...new Set([
+        ...modifiedUncommitted.split('\n'),
+        ...modifiedCommitted.split('\n'),
+      ].filter(Boolean)),
+    ]
+
+    // Capture commits made during this feature's work
+    const recentCommits = startingSha
+      ? await gitExec(`git log --oneline ${startingSha}..HEAD`, projectDir)
+      : await gitExec('git log --oneline -5', projectDir)
+
+    // Get a diff stat to show what changed
+    const diffStat = startingSha
+      ? await gitExec(`git diff --stat ${startingSha}..HEAD`, projectDir)
+      : await gitExec('git show --stat HEAD', projectDir)
 
     const handoff: ContextHandoff = {
       featureId: feature.id,
@@ -73,6 +104,8 @@ export class ContextManager {
       completedSteps,
       remainingCriteria,
       modifiedFiles,
+      recentCommits,
+      diffStat,
       partialNotes,
       handoffAt: new Date().toISOString(),
       resetCount: this.resetCount,
@@ -80,22 +113,46 @@ export class ContextManager {
 
     await writeContextHandoff(projectDir, handoff)
 
-    return [
+    const lines = [
       `CONTEXT RESET: Session context limit reached (reset #${this.resetCount}).`,
       ``,
       `Feature: ${feature.id} — ${feature.name}`,
       ``,
-      `Completed steps so far:`,
-      ...completedSteps.map(s => `  - ${s}`),
-      ``,
-      `Remaining acceptance criteria not yet implemented:`,
-      ...remainingCriteria.map(c => `  - ${c}`),
-      ``,
-      `Files modified so far: ${modifiedFiles.join(', ') || 'none'}`,
-      ``,
-      `Read sprint-context-handoff.json and sprint-completion-partial.json for full context.`,
-      `Continue implementing feature: ${feature.id}`,
-    ].join('\n')
+    ]
+
+    if (recentCommits) {
+      lines.push(`Commits made during this feature's work:`)
+      for (const line of recentCommits.split('\n')) {
+        lines.push(`  ${line}`)
+      }
+      lines.push(``)
+    }
+
+    if (diffStat) {
+      lines.push(`Files changed:`)
+      for (const line of diffStat.split('\n').slice(0, 15)) {
+        lines.push(`  ${line}`)
+      }
+      lines.push(``)
+    }
+
+    if (completedSteps.length > 0) {
+      lines.push(`Completed steps:`)
+      for (const s of completedSteps) {
+        lines.push(`  - ${s}`)
+      }
+      lines.push(``)
+    }
+
+    lines.push(`Remaining acceptance criteria to implement:`)
+    for (const c of remainingCriteria) {
+      lines.push(`  - ${c}`)
+    }
+    lines.push(``)
+    lines.push(`Read sprint-context-handoff.json for full context.`)
+    lines.push(`Continue implementing feature: ${feature.id}`)
+
+    return lines.join('\n')
   }
 
   getStats(): {

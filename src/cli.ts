@@ -58,13 +58,15 @@ program
   .description('Run the full orchestration loop (init if needed, then implement features)')
   .option('-n, --max-features <n>', 'Stop after N features', (v) => parseInt(v, 10), Infinity)
   .option('-r, --retry-limit <n>', 'Max retries per failed feature', (v) => parseInt(v, 10), 2)
+  .option('--max-resets <n>', 'Max context resets per feature before giving up', (v) => parseInt(v, 10), 5)
   .option('--dry-run', 'Print plan without running agents', false)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; dryRun: boolean }) => {
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxResets: number; dryRun: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
     const orch = new Orchestrator({
       projectDir,
       maxFeatures: opts.maxFeatures,
       retryLimit: opts.retryLimit,
+      maxContextResets: opts.maxResets,
       dryRun: opts.dryRun,
     })
 

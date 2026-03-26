@@ -14,6 +14,7 @@ import { readProgress, writeProgress, createInitialProgress } from './state/prog
 import {
   buildSprintContract,
   writeSprintContract,
+  writeCurrentFeature,
   readEvalReport,
   cleanSprintArtifacts,
   writeSprintCompletion,
@@ -22,8 +23,6 @@ import { printAgentBanner } from './logger.js'
 
 const execAsync = promisify(exec)
 
-const MAX_CONTEXT_RESETS = 3
-
 export class Orchestrator {
   private opts: Required<OrchestratorOptions>
 
@@ -31,6 +30,7 @@ export class Orchestrator {
     this.opts = {
       maxFeatures: Infinity,
       retryLimit: 2,
+      maxContextResets: 5,
       dryRun: false,
       model: 'claude-sonnet-4-6',
       ...opts,
@@ -159,7 +159,11 @@ export class Orchestrator {
 
     // Write sprint contract BEFORE coder runs — criteria are locked
     const contract = buildSprintContract(feature)
-    await writeSprintContract(projectDir, contract)
+    await Promise.all([
+      writeSprintContract(projectDir, contract),
+      // Write current-feature.json so coder reads one feature, not all 200+
+      writeCurrentFeature(projectDir, feature),
+    ])
 
     // Update progress: mark this feature as in-progress
     try {
@@ -255,15 +259,22 @@ export class Orchestrator {
 
   /**
    * Run the coder agent, handling context resets transparently.
+   *
+   * On each reset: captures git log/diff since the session started, writes a rich
+   * sprint-context-handoff.json, then starts a fresh session with a structured prompt.
+   * The fresh session reads current-feature.json (not all of features.json) to save
+   * startup tokens for actual coding work.
    */
   private async runCoderWithResets(
     feature: Feature,
   ): Promise<{ success: boolean; error?: string; durationMs: number; totalInputTokens: number }> {
-    const { projectDir } = this.opts
+    const { projectDir, maxContextResets } = this.opts
     const startTime = Date.now()
     let totalInputTokens = 0
+    // Record git SHA before the coder starts so we can show exactly what it committed
+    let startingSha = await this.getCurrentSha()
 
-    for (let resetCount = 0; resetCount <= MAX_CONTEXT_RESETS; resetCount++) {
+    for (let resetCount = 0; resetCount <= maxContextResets; resetCount++) {
       const ctxMgr = new ContextManager()
 
       try {
@@ -271,13 +282,14 @@ export class Orchestrator {
         let resetPrompt: string | undefined
 
         if (isReset) {
-          console.log(chalk.yellow(`\n  ↺ Context reset #${resetCount} — starting fresh session`))
+          console.log(chalk.yellow(`\n  ↺ Context reset #${resetCount}/${maxContextResets} — starting fresh session`))
           printAgentBanner('coder', 1, 2, `${feature.id} (context reset #${resetCount})`)
           resetPrompt = await ctxMgr.buildHandoffPrompt(
             projectDir,
             feature,
-            [], // completed steps unknown — agent reads from partial file
+            [], // remaining steps are in sprint-context-handoff.json for the agent to read
             `Reset ${resetCount}: continuing from previous session`,
+            startingSha,
           )
         }
 
@@ -292,12 +304,12 @@ export class Orchestrator {
         }
       } catch (err) {
         if (err instanceof ContextResetNeededError) {
-          // Write partial completion before resetting
+          // Write partial completion record before resetting
           await writeSprintCompletion(projectDir, {
             featureId: feature.id,
-            commitSha: 'pending',
+            commitSha: await this.getCurrentSha() ?? 'pending',
             testsPassed: false,
-            notes: `Context reset needed at reset #${resetCount}`,
+            notes: `Context reset #${resetCount}: hit context limit, continuing in next session`,
             completedAt: new Date().toISOString(),
             sessionId: 'unknown',
             isPartial: true,
@@ -305,6 +317,7 @@ export class Orchestrator {
 
           const stats = ctxMgr.getStats()
           totalInputTokens += stats.totalInput
+          // Don't update startingSha — keep the original so git diff spans the whole feature
           ctxMgr.resetForNewSession()
           continue
         }
@@ -320,9 +333,18 @@ export class Orchestrator {
 
     return {
       success: false,
-      error: `Exceeded maximum context resets (${MAX_CONTEXT_RESETS})`,
+      error: `Exceeded maximum context resets (${maxContextResets}). Consider splitting this feature into smaller pieces.`,
       durationMs: Date.now() - startTime,
       totalInputTokens,
+    }
+  }
+
+  private async getCurrentSha(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execAsync('git log --format=%H -1', { cwd: this.opts.projectDir })
+      return stdout.trim() || undefined
+    } catch {
+      return undefined
     }
   }
 

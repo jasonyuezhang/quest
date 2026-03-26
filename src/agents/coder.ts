@@ -25,8 +25,9 @@ ALWAYS do these steps first, in this exact order:
 3. Read: claude-progress.txt
    Load the current state: which features have passed, what the current feature is.
 
-4. Read: features.json
-   Find the feature assigned to you by id. Read its description and context.
+4. Read: current-feature.json
+   This contains the single feature you are implementing. If it does not exist, fall back
+   to reading features.json and finding the feature by id.
 
 5. Read: sprint-contract.json
    This is your source of truth. The acceptanceCriteria here are what you must satisfy.
@@ -72,11 +73,13 @@ If you receive a prompt starting with "CONTEXT RESET:", this means you are resum
 from a previous session that hit the context window limit.
 
 On context reset:
-1. Read sprint-context-handoff.json — it has completed steps and remaining criteria
-2. Read sprint-completion-partial.json — partial work from the previous session
-3. Run git log --oneline -5 to see what was committed
-4. Continue from where the previous session left off
-5. Only implement the remaining criteria listed in the handoff file
+1. Read sprint-context-handoff.json — it shows recentCommits, diffStat, and remainingCriteria
+2. Read current-feature.json — your feature definition
+3. Read sprint-contract.json — acceptance criteria (source of truth)
+4. Run: bash init.sh (restart dev server for the fresh session)
+5. Run: git log --oneline -5 (verify what was already committed)
+6. ONLY implement the remainingCriteria listed in sprint-context-handoff.json
+7. Do NOT re-implement work that is already committed
 
 ## Code Quality
 
