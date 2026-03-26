@@ -5,11 +5,13 @@
  * without requiring an AI agent. This is the "basic" initialization path.
  */
 
-import { writeFile, chmod } from 'node:fs/promises'
+import { writeFile, chmod, readFile, appendFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FeaturesFile, Feature } from './agents/types.js'
 import { createInitialProgress, writeProgress } from './state/progress.js'
 import { writeFeaturesFile } from './state/features.js'
+import { createDefaultConfig } from './config.js'
 
 const BASIC_INIT_SH = `#!/bin/bash
 # init.sh — Development environment setup
@@ -191,7 +193,10 @@ function buildPlaceholderFeatures(projectName: string): Feature[] {
 }
 
 /**
- * Create the three scaffold files in the target directory.
+ * Create the scaffold files in the target directory.
+ *
+ * Creates: init.sh, features.json, claude-progress.txt, .quest/config.json
+ * Also suggests .quest/ in .gitignore.
  *
  * @param projectDir  Absolute path to the project directory (must exist)
  * @param projectName Human-readable project name
@@ -218,5 +223,30 @@ export async function createBasicScaffold(
     writeFeaturesFile(projectDir, featuresFile),
     // 3. claude-progress.txt
     writeProgress(projectDir, createInitialProgress(projectName, features.length)),
+    // 4. .quest/config.json with sensible defaults
+    createDefaultConfig(projectDir),
+    // 5. Add .quest/ to .gitignore (creates if missing)
+    updateGitignore(projectDir),
   ])
+}
+
+/**
+ * Add .quest/ to .gitignore if not already present.
+ * Creates .gitignore if it doesn't exist.
+ */
+async function updateGitignore(projectDir: string): Promise<void> {
+  const gitignorePath = join(projectDir, '.gitignore')
+  const entry = '.quest/'
+
+  if (existsSync(gitignorePath)) {
+    const content = await readFile(gitignorePath, 'utf-8')
+    // Check if .quest/ is already present (exact line match)
+    const lines = content.split('\n').map(l => l.trim())
+    if (lines.includes(entry)) return
+    // Append with a newline separator
+    const suffix = content.endsWith('\n') ? '' : '\n'
+    await appendFile(gitignorePath, `${suffix}# Quest project config directory\n${entry}\n`, 'utf-8')
+  } else {
+    await writeFile(gitignorePath, `# Quest project config directory\n${entry}\n`, 'utf-8')
+  }
 }
