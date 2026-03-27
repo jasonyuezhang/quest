@@ -861,6 +861,9 @@ export class Orchestrator {
     ])
 
     let lastWorktreeFailureCategory: string | undefined
+    const maxResets = this.opts.maxContextResets
+    const coderModel = this.opts.coderModel ?? this.opts.model
+    const evaluatorModel = this.opts.evaluatorModel ?? this.opts.model
 
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const attemptLabel = attempt > 0 ? ` retry ${attempt}` : ''
@@ -871,28 +874,34 @@ export class Orchestrator {
         await writeSprintContract(worktreeDir, { ...contract, startedAt: new Date().toISOString() })
       }
 
-      // Run coder in worktree
-      printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}`, wId)
-      const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
-      ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
-      const coderModel = this.opts.coderModel ?? this.opts.model
-      const evaluatorModel = this.opts.evaluatorModel ?? this.opts.model
-      const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${attemptLabel}`, {
-        featureId: feature.id, workerId: wId, model: coderModel,
-      })
-      try {
-        await runCoderAgent(worktreeDir, feature.id, ctxMgr, false, undefined, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: coderModel })
-      } catch (err) {
-        this.tracer.endSession(coderTrace)
-        if (!(err instanceof ContextResetNeededError)) {
+      // Run coder in worktree — with context reset loop (resets don't count as retries)
+      let coderSuccess = false
+      for (let resetCount = 0; resetCount <= maxResets; resetCount++) {
+        const resetLabel = resetCount > 0 ? ` (reset #${resetCount})` : ''
+        printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}${resetLabel}`, wId)
+        const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
+        ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
+        const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${attemptLabel}${resetLabel}`, {
+          featureId: feature.id, workerId: wId, model: coderModel,
+        })
+        try {
+          await runCoderAgent(worktreeDir, feature.id, ctxMgr, resetCount > 0, undefined, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: coderModel })
+          this.tracer.endSession(coderTrace)
+          coderSuccess = true
+          break // coder finished successfully
+        } catch (err) {
+          this.tracer.endSession(coderTrace)
+          if (err instanceof ContextResetNeededError) {
+            console.log(chalk.yellow(`  [W${wId}] ↺ Context reset #${resetCount + 1}/${maxResets} — continuing in fresh session`))
+            emit({ type: 'context_reset', featureId: feature.id, resetCount: resetCount + 1, completedCount: 0, remainingCount: feature.acceptanceCriteria.length, workerId: wId })
+            continue // try again with fresh context (does NOT burn a retry)
+          }
           console.log(chalk.red(`  [W${wId}] ✗ Coder failed: ${err instanceof Error ? err.message : err}`))
-          continue
+          break // real error — fall through to retry
         }
-        // Context resets in parallel mode: just retry from scratch
-        console.log(chalk.yellow(`  [W${wId}] ↺ Context reset — retrying`))
-        continue
       }
-      this.tracer.endSession(coderTrace)
+
+      if (!coderSuccess) continue // burned this retry attempt, try again
 
       // Run evaluator in worktree
       printAgentBanner('eval', 2, 2, feature.id, wId)
