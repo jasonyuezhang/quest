@@ -19,11 +19,13 @@ import { fileURLToPath } from 'node:url'
 import { FeatureDB, rowToFeature } from '../feature-db.js'
 import { TraceDB } from '../trace-db.js'
 import { EventDB } from '../event-db.js'
+import { createQuestDB } from '../quest-db.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export function startDashboard(projectDir: string, port: number): void {
-  const db = new FeatureDB(projectDir)
+  const sharedDb = createQuestDB(projectDir)
+  const db = new FeatureDB(projectDir, sharedDb)
   const imported = db.migrateFromJson(projectDir)
   if (imported > 0) {
     console.log(`Migrated ${imported} features from features.json to SQLite`)
@@ -120,7 +122,7 @@ export function startDashboard(projectDir: string, port: number): void {
   // ── Events API ───────────────────────────────────────────────────────
 
   let evtDb: InstanceType<typeof EventDB> | null = null
-  try { evtDb = new EventDB(projectDir) } catch { /* no events db yet */ }
+  try { evtDb = new EventDB(projectDir, sharedDb) } catch { /* no events db yet */ }
 
   app.get('/api/events', (req, res) => {
     if (!evtDb) return res.json([])
@@ -153,7 +155,7 @@ export function startDashboard(projectDir: string, port: number): void {
   // ── Trace/Log API ──────────────────────────────────────────────────────
 
   let traceDb: InstanceType<typeof TraceDB> | null = null
-  try { traceDb = new TraceDB(projectDir) } catch { /* no traces yet */ }
+  try { traceDb = new TraceDB(projectDir, sharedDb) } catch { /* no traces yet */ }
 
   app.get('/api/traces/sessions', (_req, res) => {
     if (!traceDb) return res.json([])
@@ -212,6 +214,6 @@ export function startDashboard(projectDir: string, port: number): void {
   })
 
   // Cleanup on exit
-  process.on('SIGINT', () => { db.close(); traceDb?.close(); evtDb?.close(); process.exit(0) })
-  process.on('SIGTERM', () => { db.close(); traceDb?.close(); evtDb?.close(); process.exit(0) })
+  process.on('SIGINT', () => { sharedDb.close(); process.exit(0) })
+  process.on('SIGTERM', () => { sharedDb.close(); process.exit(0) })
 }

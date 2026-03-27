@@ -13,9 +13,10 @@
  */
 
 import Database from 'better-sqlite3'
-import { mkdirSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgentLabel } from './logger.js'
+import { createQuestDB } from './quest-db.js'
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -39,7 +40,7 @@ const SCHEMA = `
     status        TEXT DEFAULT 'running'
   );
 
-  CREATE TABLE IF NOT EXISTS events (
+  CREATE TABLE IF NOT EXISTS trace_events (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id    TEXT NOT NULL,
     seq           INTEGER NOT NULL,
@@ -57,10 +58,10 @@ const SCHEMA = `
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq);
-  CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, ts);
-  CREATE INDEX IF NOT EXISTS idx_events_tool ON events(tool_name) WHERE tool_name IS NOT NULL;
-  CREATE INDEX IF NOT EXISTS idx_events_file ON events(file_path) WHERE file_path IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_trace_events_session ON trace_events(session_id, seq);
+  CREATE INDEX IF NOT EXISTS idx_trace_events_type ON trace_events(type, ts);
+  CREATE INDEX IF NOT EXISTS idx_trace_events_tool ON trace_events(tool_name) WHERE tool_name IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_trace_events_file ON trace_events(file_path) WHERE file_path IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent);
   CREATE INDEX IF NOT EXISTS idx_sessions_feature ON sessions(feature_id) WHERE feature_id IS NOT NULL;
 `
@@ -71,22 +72,20 @@ const SCHEMA = `
 
 export class TraceDB {
   private db: Database.Database
+  private ownsConnection: boolean
   private insertEventStmt: Database.Statement
   private insertSessionStmt: Database.Statement
   private updateSessionStmt: Database.Statement
-  private batchInsertEvents: Database.Transaction<(events: EventRow[]) => void>
+  private batchInsertEvents: Database.Transaction<(events: TraceEventRow[]) => void>
 
-  constructor(projectDir: string) {
-    const dbPath = join(projectDir, '.quest', 'traces.db')
-    mkdirSync(dirname(dbPath), { recursive: true })
-
-    this.db = new Database(dbPath)
-
-    // WAL mode: concurrent readers + serialized writers with automatic retry
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('busy_timeout = 5000')
-    this.db.pragma('synchronous = NORMAL')
-    this.db.pragma('wal_autocheckpoint = 1000')
+  constructor(projectDir: string, db?: Database.Database) {
+    if (db) {
+      this.db = db
+      this.ownsConnection = false
+    } else {
+      this.db = createQuestDB(projectDir)
+      this.ownsConnection = true
+    }
 
     this.db.exec(SCHEMA)
 
@@ -109,14 +108,14 @@ export class TraceDB {
     `)
 
     this.insertEventStmt = this.db.prepare(`
-      INSERT INTO events
+      INSERT INTO trace_events
         (session_id, seq, ts, type, tool_name, file_path, content_text, input_json, input_tokens, output_tokens, context_window, duration_ms, is_error)
       VALUES
         (@session_id, @seq, @ts, @type, @tool_name, @file_path, @content_text, @input_json, @input_tokens, @output_tokens, @context_window, @duration_ms, @is_error)
     `)
 
     // Batch insert wraps multiple inserts in a single transaction (one lock acquisition)
-    this.batchInsertEvents = this.db.transaction((events: EventRow[]) => {
+    this.batchInsertEvents = this.db.transaction((events: TraceEventRow[]) => {
       for (const event of events) {
         this.insertEventStmt.run(event)
       }
@@ -187,11 +186,11 @@ export class TraceDB {
 
   // ── Event recording ─────────────────────────────────────────────────────
 
-  insertEvent(event: EventRow): void {
+  insertEvent(event: TraceEventRow): void {
     this.insertEventStmt.run(event)
   }
 
-  insertEvents(events: EventRow[]): void {
+  insertEvents(events: TraceEventRow[]): void {
     if (events.length === 0) return
     this.batchInsertEvents(events)
   }
@@ -233,23 +232,23 @@ export class TraceDB {
     return this.db.prepare('SELECT * FROM sessions WHERE session_id LIKE ? LIMIT 1').get(`${sessionId}%`) as SessionRow | undefined
   }
 
-  getSessionEvents(sessionId: string): EventRow[] {
+  getSessionEvents(sessionId: string): TraceEventRow[] {
     // Support partial match
     const session = this.getSession(sessionId)
     if (!session) return []
 
-    return this.db.prepare('SELECT * FROM events WHERE session_id = ? ORDER BY seq').all(session.session_id) as EventRow[]
+    return this.db.prepare('SELECT * FROM trace_events WHERE session_id = ? ORDER BY seq').all(session.session_id) as TraceEventRow[]
   }
 
   /** Find all events that touched a specific file path */
-  queryByFile(filePath: string): Array<EventRow & { agent: string; topic: string }> {
+  queryByFile(filePath: string): Array<TraceEventRow & { agent: string; topic: string }> {
     return this.db.prepare(`
       SELECT e.*, s.agent, s.topic
-      FROM events e JOIN sessions s ON e.session_id = s.session_id
+      FROM trace_events e JOIN sessions s ON e.session_id = s.session_id
       WHERE e.file_path LIKE @pattern
       ORDER BY e.ts DESC
       LIMIT 100
-    `).all({ pattern: `%${filePath}%` }) as Array<EventRow & { agent: string; topic: string }>
+    `).all({ pattern: `%${filePath}%` }) as Array<TraceEventRow & { agent: string; topic: string }>
   }
 
   /** Token usage aggregated by agent type */
@@ -287,7 +286,7 @@ export class TraceDB {
       SELECT tool_name,
         COUNT(*) as count,
         COUNT(DISTINCT session_id) as sessions
-      FROM events
+      FROM trace_events
       WHERE tool_name IS NOT NULL
       GROUP BY tool_name
       ORDER BY count DESC
@@ -298,14 +297,14 @@ export class TraceDB {
   /** Database stats */
   stats(): { sessions: number; events: number; dbSizeBytes: number } {
     const sessions = (this.db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c
-    const events = (this.db.prepare('SELECT COUNT(*) as c FROM events').get() as { c: number }).c
+    const events = (this.db.prepare('SELECT COUNT(*) as c FROM trace_events').get() as { c: number }).c
     const pageCount = (this.db.prepare('PRAGMA page_count').get() as { page_count: number }).page_count
     const pageSize = (this.db.prepare('PRAGMA page_size').get() as { page_size: number }).page_size
     return { sessions, events, dbSizeBytes: pageCount * pageSize }
   }
 
   close(): void {
-    this.db.close()
+    if (this.ownsConnection) this.db.close()
   }
 }
 
@@ -330,7 +329,7 @@ export interface SessionRow {
   status: string
 }
 
-export interface EventRow {
+export interface TraceEventRow {
   id?: number
   session_id: string
   seq: number
@@ -347,6 +346,9 @@ export interface EventRow {
   is_error: number | null
 }
 
+/** @deprecated Use TraceEventRow instead */
+export type EventRow = TraceEventRow
+
 // ---------------------------------------------------------------------------
 // TraceSQLSession — per-agent session that buffers and flushes to DB
 // ---------------------------------------------------------------------------
@@ -355,7 +357,7 @@ export class TraceSQLSession {
   readonly sessionId: string
   private db: TraceDB
   private seq = 0
-  private buffer: EventRow[] = []
+  private buffer: TraceEventRow[] = []
   private turns = 0
   private totalInput = 0
   private totalOutput = 0
@@ -573,7 +575,7 @@ function extractFilePath(input: unknown): string | null {
 // Formatting (for quest inspect)
 // ---------------------------------------------------------------------------
 
-export function formatSessionFromDB(session: SessionRow, events: EventRow[]): string {
+export function formatSessionFromDB(session: SessionRow, events: TraceEventRow[]): string {
   const lines: string[] = []
 
   const duration = session.ended_at
