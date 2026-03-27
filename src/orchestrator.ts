@@ -11,7 +11,7 @@ import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
 import { runReviewerAgent, readReviewReport } from './agents/reviewer.js'
 import { ContextManager } from './context/manager.js'
-import { readFeaturesFile, writeFeaturesFile, getNextFeature, countPassing } from './state/features.js'
+// Features are read from SQLite via this.store (no more JSON file reads)
 import { QuestStore } from './store.js'
 import { readProgress, writeProgress, createInitialProgress } from './state/progress.js'
 import {
@@ -412,7 +412,7 @@ export class Orchestrator {
     // Load plugins from .quest/plugins/ and fire onRunStart hook
     await this.pluginManager.load()
     {
-      const featuresDataForRunStart = await readFeaturesFile(projectDir)
+      const featuresDataForRunStart = this.store.readFeatures()
       await this.pluginManager.onRunStart({
         projectDir,
         totalFeatures: featuresDataForRunStart.features.length,
@@ -434,23 +434,23 @@ export class Orchestrator {
       while (implemented + failed < maxFeatures) {
         // Check shutdown flag before starting a new feature
         if (this.shutdownRequested) {
-          const featuresData = await readFeaturesFile(projectDir)
-          const inProgress = getNextFeature(featuresData.features)
+          const featuresData = this.store.readFeatures()
+          const inProgress = this.store.getNextFeature()
           if (inProgress) {
             await this.performGracefulShutdown(inProgress.id, inProgress.name)
           }
           break
         }
 
-        const featuresData = await readFeaturesFile(projectDir)
-        const next = getNextFeature(featuresData.features)
+        const featuresData = this.store.readFeatures()
+        const next = this.store.getNextFeature()
 
         if (!next) {
           this.log(chalk.green('\n✅ All features implemented!'))
           const total = featuresData.features.length
           const costSummary = computeRunCost(readEvents(projectDir))
           const runDoneMs = Date.now() - runStart
-          const runPassing = countPassing(featuresData.features)
+          const runPassing = this.store.countPassing()
           emit({ type: 'run_complete', passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd, costByAgent: costSummary.byAgent })
           this.ciLog({ event: 'run_complete', passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd })
           await this.pluginManager.onRunComplete({ projectDir, passing: runPassing, total, durationMs: runDoneMs, totalCostUsd: costSummary.totalCostUsd })
@@ -469,7 +469,7 @@ export class Orchestrator {
         }
 
         const total = featuresData.features.length
-        const passing = countPassing(featuresData.features)
+        const passing = this.store.countPassing()
         const pct = Math.round((passing / total) * 100)
         this.log(
           chalk.bold(`\n◆ Feature ${passing + 1}/${total} (${pct}% done) — ${chalk.white(next.id)}`) +
@@ -556,7 +556,7 @@ export class Orchestrator {
     // Clean up stale worktrees from previous crashed runs
     await cleanupAllWorktrees(projectDir)
 
-    const featuresData = await readFeaturesFile(projectDir)
+    const featuresData = this.store.readFeatures()
     const allFeatures = featuresData.features.slice(0, maxFeatures)
     const total = featuresData.features.length
 
@@ -585,7 +585,7 @@ export class Orchestrator {
     if (pending.length === 0) {
       this.log(chalk.green('\n✅ All features already implemented!'))
       const earlyExitCost = computeRunCost(readEvents(projectDir))
-      const earlyPassing = countPassing(featuresData.features)
+      const earlyPassing = this.store.countPassing()
       emit({ type: 'run_complete', passing: earlyPassing, total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd, costByAgent: earlyExitCost.byAgent })
       this.ciLog({ event: 'run_complete', passing: earlyPassing, total, durationMs: 0, totalCostUsd: earlyExitCost.totalCostUsd })
       await notifyRunComplete({
@@ -850,7 +850,7 @@ export class Orchestrator {
 
     // Clean and write sprint artifacts in the worktree
     await cleanSprintArtifacts(worktreeDir)
-    const worktreeFeaturesData = await readFeaturesFile(this.opts.projectDir)
+    const worktreeFeaturesData = this.store.readFeatures()
     const worktreePreviouslyPassingIds = worktreeFeaturesData.features
       .filter(f => f.passes && f.id !== feature.id)
       .map(f => f.id)
@@ -1014,7 +1014,7 @@ export class Orchestrator {
     await cleanSprintArtifacts(projectDir)
 
     // Write sprint contract BEFORE coder runs — criteria are locked
-    const featuresDataForContract = await readFeaturesFile(projectDir)
+    const featuresDataForContract = this.store.readFeatures()
     const previouslyPassingIds = featuresDataForContract.features
       .filter(f => f.passes && f.id !== feature.id)
       .map(f => f.id)
@@ -1269,7 +1269,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         // Update progress
         try {
           const progress = await readProgress(projectDir)
-          const featuresData = await readFeaturesFile(projectDir)
+          const featuresData = this.store.readFeatures()
           const commitSha = await this.getCurrentSha()
           const featureCommitShas = { ...(progress.featureCommitShas ?? {}) }
           if (commitSha) {
@@ -1277,7 +1277,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
           }
           await writeProgress(projectDir, {
             ...progress,
-            passedFeatures: countPassing(featuresData.features),
+            passedFeatures: this.store.countPassing(),
             currentFeatureId: null,
             lastSessionId: evalResult.sessionId,
             featureCommitShas,
@@ -1456,7 +1456,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
     const { projectDir } = this.opts
 
     // Load features and find the target feature
-    const featuresData = await readFeaturesFile(projectDir)
+    const featuresData = this.store.readFeatures()
     const feature = featuresData.features.find(f => f.id === rollbackFeatureId)
     if (!feature) {
       throw new Error(`Feature not found: ${rollbackFeatureId}`)
@@ -1495,12 +1495,8 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
     }
 
     for (const fid of featureIds) {
-      const f = featuresData.features.find(x => x.id === fid)
-      if (f) {
-        f.passes = false
-      }
+      this.store.featureDb.setFeatureStatus(fid, 'pending')
     }
-    await writeFeaturesFile(projectDir, featuresData)
 
     // Remove the commit SHA for the rolled-back feature from progress
     const updatedShas = { ...(progress.featureCommitShas ?? {}) }
@@ -1508,18 +1504,18 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
 
     await writeProgress(projectDir, {
       ...progress,
-      passedFeatures: countPassing(featuresData.features),
+      passedFeatures: this.store.countPassing(),
       featureCommitShas: updatedShas,
     })
   }
 
   async getStatus(): Promise<{ passing: number; total: number; currentFeature: string | null }> {
     const { projectDir } = this.opts
-    const featuresData = await readFeaturesFile(projectDir)
+    const featuresData = this.store.readFeatures()
     const progress = await readProgress(projectDir).catch(() => null)
 
     return {
-      passing: countPassing(featuresData.features),
+      passing: this.store.countPassing(),
       total: featuresData.features.length,
       currentFeature: progress?.currentFeatureId ?? null,
     }
