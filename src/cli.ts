@@ -707,6 +707,10 @@ program
       console.log(`  ${icon} ${cr.criterion}`)
       console.log(chalk.gray(`    ${cr.evidence}`))
     }
+
+    if (report.verdict !== 'pass') {
+      process.exit(1)
+    }
   })
 
 /**
