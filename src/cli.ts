@@ -201,10 +201,60 @@ program
   .option('--webhook <url>', 'Send POST notifications on feature_done and run_complete events to this URL')
   .option('--notify <channel>', 'Send formatted notifications to a channel (currently: slack). Slack URL read from QUEST_SLACK_WEBHOOK env var')
   .option('-q, --quiet', 'Show only high-level progress (creating files, running tests, committing). Tool-level detail goes to traces only.', false)
+  .option('--dashboard', 'Auto-launch the web dashboard alongside the run (default port: 3700)', false)
+  .option('--dashboard-port <port>', 'Port for the auto-launched dashboard', (v) => parseInt(v, 10), 3700)
+  .option('-D, --detach', 'Run in background — logs to .quest/run.log, dashboard stays in foreground', false)
   .option('--ci', 'CI mode: no progress bars, structured JSON to stdout, exit code reflects outcome (0=all pass, 1=any fail, 2=error)', false)
   .option('--fail-fast', 'Stop on first feature failure instead of continuing', false)
-  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string; quiet: boolean; ci: boolean; failFast: boolean }) => {
+  .action(async (projectDirArg: string | undefined, opts: { maxFeatures: number; retryLimit: number; maxConcurrency: number; maxResets: number; maxContext: number; dryRun: boolean; review: boolean; skipInit: boolean; healthTimeout: number; noTranscripts: boolean; skipRegression: boolean; tdd: boolean; evidence: boolean; coderModel?: string; evaluatorModel?: string; webhook?: string; notify?: string; quiet: boolean; dashboard: boolean; dashboardPort: number; detach: boolean; ci: boolean; failFast: boolean }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+
+    // Detach mode: re-spawn ourselves as a background process, then launch dashboard
+    if (opts.detach) {
+      const { spawn } = await import('node:child_process')
+      const { openSync } = await import('node:fs')
+      const { mkdirSync } = await import('node:fs')
+
+      const { join: pathJoin } = await import('node:path')
+      const logPath = pathJoin(projectDir, '.quest', 'run.log')
+      mkdirSync(pathJoin(projectDir, '.quest'), { recursive: true })
+      const logFd = openSync(logPath, 'a')
+
+      // Re-run ourselves without --detach, with output redirected to logfile
+      const args = process.argv.slice(2).filter(a => a !== '--detach' && a !== '-D')
+      if (!args.includes('--quiet') && !args.includes('-q')) args.push('--quiet')
+      if (!args.includes('--dashboard')) args.push('--dashboard')
+
+      const child = spawn(process.execPath, [process.argv[1], ...args], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        cwd: projectDir,
+      })
+      child.unref()
+
+      console.log(chalk.green(`Quest running in background (PID: ${child.pid})`))
+      console.log(chalk.gray(`  Log: ${logPath}`))
+      console.log(chalk.gray(`  Dashboard: http://localhost:${opts.dashboardPort}`))
+      console.log(chalk.gray(`  Stop: kill ${child.pid}`))
+      console.log()
+
+      // Write PID file for easy cleanup
+      const { writeFileSync } = await import('node:fs')
+      writeFileSync(pathJoin(projectDir, '.quest', 'run.pid'), String(child.pid), 'utf-8')
+
+      return
+    }
+
+    // Auto-launch dashboard alongside the run
+    if (opts.dashboard) {
+      const { startDashboard } = await import('./dashboard/server.js')
+      startDashboard(projectDir, opts.dashboardPort)
+      const { exec: execCmd } = await import('node:child_process')
+      // Open browser (best-effort, non-blocking)
+      const url = `http://localhost:${opts.dashboardPort}`
+      if (process.platform === 'darwin') execCmd(`open ${url}`)
+      else if (process.platform === 'linux') execCmd(`xdg-open ${url}`)
+    }
 
     // Set log verbosity
     if (opts.quiet || opts.ci) {
