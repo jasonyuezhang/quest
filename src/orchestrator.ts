@@ -386,7 +386,7 @@ export class Orchestrator {
     const traceSession = this.startTrace('init', `Initialize ${effectiveName}`, {
       model: 'claude-sonnet-4-6', userPrompt: effectiveDescription,
     })
-    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr)
+    const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr, traceSession)
     this.tracer.endSession(traceSession)
 
     if (!result.success) {
@@ -902,7 +902,7 @@ export class Orchestrator {
           featureId: feature.id, workerId: wId, model: coderModel,
         })
         try {
-          await runCoderAgent(worktreeDir, feature.id, ctxMgr, resetCount > 0, undefined, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: coderModel })
+          await runCoderAgent(worktreeDir, feature.id, ctxMgr, resetCount > 0, undefined, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: coderModel, traceSession: coderTrace })
           this.tracer.endSession(coderTrace)
           coderSuccess = true
           break // coder finished successfully
@@ -1371,7 +1371,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         const coderTrace = this.startTrace('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
           featureId: feature.id, model: this.opts.coderModel ?? this.opts.model,
         })
-        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: this.opts.coderModel ?? this.opts.model })
+        await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: this.opts.coderModel ?? this.opts.model, traceSession: coderTrace })
         this.tracer.endSession(coderTrace)
 
         const stats = ctxMgr.getStats()

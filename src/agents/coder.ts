@@ -3,6 +3,7 @@ import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
 import { TranscriptCapture } from '../transcript.js'
+import type { TraceSQLSession } from '../trace-db.js'
 import { withMemory, memoryPromptExtension } from '../memory.js'
 
 /**
@@ -152,7 +153,7 @@ export async function runCoderAgent(
   contextManager: ContextManager,
   isContextReset = false,
   contextResetPrompt?: string,
-  options?: { noTranscripts?: boolean; model?: string; tdd?: boolean },
+  options?: { noTranscripts?: boolean; model?: string; tdd?: boolean; traceSession?: TraceSQLSession | null },
 ): Promise<AgentResult> {
   const startTime = Date.now()
   const model = options?.model ?? 'claude-sonnet-4-6'
@@ -190,6 +191,7 @@ Follow your session startup protocol exactly (pwd, git log, read current-feature
       },
     })) {
       logMessage('coder', message)
+      options?.traceSession?.recordSDKMessage(message as Parameters<TraceSQLSession['recordSDKMessage']>[0])
       capture?.recordSDKMessage(message as Parameters<TranscriptCapture['recordSDKMessage']>[0])
       if (message.type === 'result') {
         sessionId = message.session_id ?? sessionId
