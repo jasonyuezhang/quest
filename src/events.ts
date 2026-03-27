@@ -1,16 +1,14 @@
 /**
  * Structured event log for the Quest harness.
  *
- * Events are appended as JSONL to quest-events.jsonl in the project directory.
- * The `quest monitor` command tails this file and renders a live TUI.
+ * Events are stored in SQLite (events.db) for indexed queries and concurrent-safe writes.
+ * Falls back to JSONL append if the database is not initialized (e.g., during early init).
  *
- * Using appendFileSync so events from the orchestrator and logger are written
- * atomically in order without async race conditions.
+ * The `quest dashboard` Activity tab reads events from the database.
  */
 
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import type { AgentLabel } from './logger.js'
+import { EventDB } from './event-db.js'
 
 export type QuestEvent =
   | { ts: string; type: 'run_start'; projectName: string; total: number; concurrency?: number; models?: Record<string, string> }
@@ -32,20 +30,31 @@ export type QuestEvent =
   | { ts: string; type: 'init_failed'; attempt: number; exitCode: number | null; stderr: string }
   | { ts: string; type: 'shutdown'; featureId: string; featureName: string; reason: string }
 
-const EVENT_LOG_FILE = 'quest-events.jsonl'
-
-let logFilePath: string | undefined
+let eventDb: EventDB | undefined
 let currentAgent: AgentLabel | undefined
 
 /**
  * Initialize the event log for a project.
  * Call this once at the start of `quest run` / `quest init`.
- * Creates a new log file (overwrites previous run).
+ * Creates a new SQLite database (or clears existing events for a fresh run).
  */
 export function initEventLog(projectDir: string): void {
-  logFilePath = join(projectDir, EVENT_LOG_FILE)
+  eventDb = new EventDB(projectDir)
+  // Migrate any existing JSONL events on first use
+  eventDb.migrateFromJsonl(projectDir)
   // Start fresh for each run
-  writeFileSync(logFilePath, '', 'utf-8')
+  eventDb.clearEvents()
+}
+
+/**
+ * Get (or create) the EventDB for a project directory.
+ * Used by read-only consumers (dashboard, CLI status, reports).
+ */
+export function getEventDb(projectDir: string): EventDB {
+  if (!eventDb) {
+    eventDb = new EventDB(projectDir)
+  }
+  return eventDb
 }
 
 /** Set the current agent so tool events are labeled correctly */
@@ -60,49 +69,26 @@ export function getCurrentAgent(): AgentLabel | undefined {
 /** Distributive Omit — works correctly on discriminated unions */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
-/** Append a structured event to the JSONL log */
+/** Append a structured event to the SQLite event log */
 export function emit(event: DistributiveOmit<QuestEvent, 'ts'>): void {
-  if (!logFilePath) return
-  const line = JSON.stringify({ ...event, ts: new Date().toISOString() }) + '\n'
+  if (!eventDb) return
+  const fullEvent = { ...event, ts: new Date().toISOString() }
   try {
-    appendFileSync(logFilePath, line, 'utf-8')
+    eventDb.emit(fullEvent as Record<string, unknown>)
   } catch {
-    // Non-fatal — monitor just won't see this event
+    // Non-fatal — dashboard just won't see this event
   }
 }
 
-/** Read all events from the log file */
+/** Read all events from the event log */
 export function readEvents(projectDir: string): QuestEvent[] {
-  const path = join(projectDir, EVENT_LOG_FILE)
-  if (!existsSync(path)) return []
-  try {
-    return readFileSync(path, 'utf-8')
-      .split('\n')
-      .filter(Boolean)
-      .map(line => JSON.parse(line) as QuestEvent)
-  } catch {
-    return []
-  }
+  const db = getEventDb(projectDir)
+  return db.readAll()
 }
 
-/** Read new events starting at a byte offset. Returns new events and new offset. */
-export function readNewEvents(projectDir: string, fromOffset: number): { events: QuestEvent[]; newOffset: number } {
-  const path = join(projectDir, EVENT_LOG_FILE)
-  if (!existsSync(path)) return { events: [], newOffset: fromOffset }
-  try {
-    const content = readFileSync(path, 'utf-8')
-    if (content.length <= fromOffset) return { events: [], newOffset: fromOffset }
-    const newContent = content.slice(fromOffset)
-    const events = newContent
-      .split('\n')
-      .filter(Boolean)
-      .map(line => {
-        try { return JSON.parse(line) as QuestEvent }
-        catch { return null }
-      })
-      .filter((e): e is QuestEvent => e !== null)
-    return { events, newOffset: content.length }
-  } catch {
-    return { events: [], newOffset: fromOffset }
-  }
+/** Read new events after a cursor position. Returns new events and new cursor. */
+export function readNewEvents(projectDir: string, fromCursor: number): { events: QuestEvent[]; newOffset: number } {
+  const db = getEventDb(projectDir)
+  const { events, lastId } = db.readAfter(fromCursor)
+  return { events, newOffset: lastId }
 }

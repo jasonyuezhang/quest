@@ -99,6 +99,7 @@
 <div class="toolbar">
   <button id="tab-features" class="active" onclick="setTab('features')">Features</button>
   <button id="tab-traces" onclick="setTab('traces')">Traces</button>
+  <button id="tab-activity" onclick="setTab('activity')">Activity</button>
   <span id="features-toolbar" style="display:contents">
     <button id="view-board" class="active" onclick="setView('board')">Board</button>
     <button id="view-list" onclick="setView('list')">List</button>
@@ -125,6 +126,21 @@
     <button onclick="loadCostByAgent()">Cost by Agent</button>
     <button onclick="loadTopTools()">Top Tools</button>
   </span>
+  <span id="activity-toolbar" style="display:none">
+    <select id="activity-filter" onchange="loadActivity()">
+      <option value="">All events</option>
+      <option value="feature_start,feature_done">Feature lifecycle</option>
+      <option value="agent_start,agent_done">Agent sessions</option>
+      <option value="tool_use">Tool calls</option>
+      <option value="eval_verdict">Verdicts</option>
+      <option value="context_reset">Context resets</option>
+      <option value="run_start,run_complete">Run lifecycle</option>
+    </select>
+    <input class="search" id="activity-feature-filter" placeholder="Filter by feature ID..." oninput="loadActivity()">
+    <button id="activity-auto" class="active" onclick="toggleAutoRefresh()">Auto-refresh</button>
+    <button onclick="loadActivity()">Refresh</button>
+    <button onclick="loadActivityCost()">Cost Summary</button>
+  </span>
 </div>
 
 <div id="features-panel">
@@ -143,6 +159,10 @@
       <div class="modal-actions"><button onclick="closeTraceModal()">Close</button></div>
     </div>
   </div>
+</div>
+<div id="activity-panel" style="display:none">
+  <div id="activity-summary" style="padding:12px 24px;display:flex;gap:24px;font-size:13px;color:var(--text-muted);border-bottom:1px solid var(--border)"></div>
+  <div class="list" id="activity-content" style="max-height:calc(100vh - 200px);overflow-y:auto"></div>
 </div>
 
 <!-- Edit/Add Modal -->
@@ -451,13 +471,14 @@ let activeTab = 'features'
 function setTab(tab) {
   activeTab = tab
   syncToURL()
-  document.getElementById('tab-features').className = tab === 'features' ? 'active' : ''
-  document.getElementById('tab-traces').className = tab === 'traces' ? 'active' : ''
-  document.getElementById('features-toolbar').style.display = tab === 'features' ? 'contents' : 'none'
-  document.getElementById('traces-toolbar').style.display = tab === 'traces' ? 'contents' : 'none'
-  document.getElementById('features-panel').style.display = tab === 'features' ? 'block' : 'none'
-  document.getElementById('traces-panel').style.display = tab === 'traces' ? 'block' : 'none'
+  for (const t of ['features', 'traces', 'activity']) {
+    document.getElementById('tab-' + t).className = tab === t ? 'active' : ''
+    const toolbar = document.getElementById(t + '-toolbar')
+    if (toolbar) toolbar.style.display = tab === t ? 'contents' : 'none'
+    document.getElementById(t + '-panel').style.display = tab === t ? 'block' : 'none'
+  }
   if (tab === 'traces') loadTraces()
+  if (tab === 'activity') loadActivity()
 }
 
 // ── URL state sync ────────────────────────────────────────────────────
@@ -480,7 +501,7 @@ function syncToURL() {
 function loadFromURL() {
   const params = new URLSearchParams(location.hash.slice(1))
   const tab = params.get('tab')
-  if (tab === 'traces' || tab === 'features') setTab(tab)
+  if (tab === 'traces' || tab === 'features' || tab === 'activity') setTab(tab)
   if (params.get('view')) setView(params.get('view'))
   if (params.get('q')) document.getElementById('search').value = params.get('q')
   if (params.get('priority')) document.getElementById('filter-priority').value = params.get('priority')
@@ -773,6 +794,246 @@ function renderDAG() {
     <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
       ${svg}
     </div>
+  `
+}
+
+// ── Activity Tab ──────────────────────────────────────────────────────
+
+let activityAutoRefresh = true
+let activityCursor = 0
+let activityTimer = null
+
+function toggleAutoRefresh() {
+  activityAutoRefresh = !activityAutoRefresh
+  document.getElementById('activity-auto').className = activityAutoRefresh ? 'active' : ''
+  if (activityAutoRefresh) startActivityPoll()
+  else stopActivityPoll()
+}
+
+function startActivityPoll() {
+  stopActivityPoll()
+  if (!activityAutoRefresh) return
+  activityTimer = setInterval(() => {
+    if (activeTab === 'activity') pollActivity()
+  }, 2000)
+}
+
+function stopActivityPoll() {
+  if (activityTimer) { clearInterval(activityTimer); activityTimer = null }
+}
+
+async function loadActivity() {
+  activityCursor = 0
+  const res = await fetch('/api/events')
+  const events = await res.json()
+  if (!Array.isArray(events)) { renderActivityEvents([]); return }
+  renderActivityEvents(events)
+  // Set cursor to the latest
+  const statsRes = await fetch('/api/events/stats')
+  const stats = await statsRes.json()
+  activityCursor = stats.total ?? 0
+  startActivityPoll()
+}
+
+async function pollActivity() {
+  try {
+    const res = await fetch(`/api/events?after=${activityCursor}`)
+    const data = await res.json()
+    if (data.events && data.events.length > 0) {
+      activityCursor = data.lastId
+      appendActivityEvents(data.events)
+    }
+  } catch { /* ignore poll errors */ }
+}
+
+function fmtTime(ts) {
+  if (!ts) return ''
+  try { return new Date(ts).toISOString().split('T')[1]?.split('.')[0] ?? '' } catch { return '' }
+}
+
+function fmtDuration(ms) {
+  if (!ms) return ''
+  if (ms < 1000) return ms + 'ms'
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's'
+  return Math.floor(ms / 60000) + 'm' + Math.floor((ms % 60000) / 1000) + 's'
+}
+
+function eventIcon(type) {
+  const icons = {
+    run_start: '<span style="color:var(--accent)">&#9654;</span>',
+    run_complete: '<span style="color:var(--green)">&#9632;</span>',
+    feature_start: '<span style="color:var(--yellow)">&#9655;</span>',
+    feature_done: '',
+    agent_start: '<span style="color:var(--accent)">&#9679;</span>',
+    agent_done: '<span style="color:var(--text-muted)">&#9675;</span>',
+    tool_use: '<span style="color:var(--text-dim)">&#8226;</span>',
+    eval_verdict: '',
+    context_reset: '<span style="color:var(--yellow)">&#8635;</span>',
+    dag_built: '<span style="color:var(--purple)">&#9670;</span>',
+    batch_plan: '<span style="color:var(--text-dim)">&#9633;</span>',
+    feature_unblocked: '<span style="color:var(--green)">&#8599;</span>',
+    shutdown: '<span style="color:var(--red)">&#9632;</span>',
+    init_failed: '<span style="color:var(--red)">&#10007;</span>',
+  }
+  return icons[type] || '<span style="color:var(--text-dim)">&#8226;</span>'
+}
+
+function renderEventRow(e) {
+  const time = fmtTime(e.ts)
+  const worker = e.workerId ? `<span style="color:var(--text-dim)">W${e.workerId}</span> ` : ''
+
+  switch (e.type) {
+    case 'run_start':
+      return `<div style="color:var(--accent);font-weight:500">[${time}] ${eventIcon(e.type)} RUN START — ${esc(e.projectName)} (${e.total} features${e.concurrency ? ', ' + e.concurrency + ' workers' : ''})</div>`
+    case 'run_complete':
+      return `<div style="color:var(--green);font-weight:500">[${time}] ${eventIcon(e.type)} RUN COMPLETE — ${e.passing}/${e.total} passed in ${fmtDuration(e.durationMs)}${e.totalCostUsd ? ' ($' + e.totalCostUsd.toFixed(2) + ')' : ''}</div>`
+    case 'feature_start':
+      return `<div>[${time}] ${eventIcon(e.type)} ${worker}<span style="color:var(--yellow)">FEATURE START</span> <span style="font-weight:500">${esc(e.featureId)}</span> <span style="color:var(--text-dim)">[${e.priority}] ${e.index}/${e.total}</span></div>`
+    case 'feature_done': {
+      const color = e.verdict === 'pass' ? 'var(--green)' : 'var(--red)'
+      const icon = e.verdict === 'pass' ? '&#10003;' : '&#10007;'
+      return `<div>[${time}] <span style="color:${color}">${icon}</span> ${worker}<span style="color:${color}">FEATURE ${e.verdict.toUpperCase()}</span> <span style="font-weight:500">${esc(e.featureId)}</span> <span style="color:var(--text-dim)">attempt ${e.attempt} ${fmtDuration(e.durationMs)}${e.failureCategory ? ' [' + e.failureCategory + ']' : ''}</span></div>`
+    }
+    case 'agent_start':
+      return `<div style="color:var(--text-muted)">[${time}] ${eventIcon(e.type)} ${worker}<span style="color:${e.agent === 'coder' ? 'var(--accent)' : 'var(--purple)'}">${e.agent}</span> started${e.featureId ? ' for ' + e.featureId : ''}${e.resetCount ? ' (reset #' + e.resetCount + ')' : ''}${e.model ? ' [' + e.model + ']' : ''}</div>`
+    case 'agent_done': {
+      const dur = fmtDuration(e.durationMs)
+      const tokens = e.inputTokens ? ` ${e.inputTokens}in/${e.outputTokens}out` : ''
+      return `<div style="color:var(--text-muted)">[${time}] ${eventIcon(e.type)} ${worker}<span style="color:${e.agent === 'coder' ? 'var(--accent)' : 'var(--purple)'}">${e.agent}</span> done — ${e.turns} turns ${dur}${tokens} ${e.success ? '<span style="color:var(--green)">OK</span>' : '<span style="color:var(--red)">ERR</span>'}</div>`
+    }
+    case 'tool_use':
+      return `<div style="color:var(--text-dim);padding-left:16px">[${time}] ${eventIcon(e.type)} ${worker}<span style="color:var(--yellow)">${esc(e.tool)}</span> <span style="color:var(--text-dim)">${esc((e.summary || '').slice(0, 80))}</span></div>`
+    case 'eval_verdict': {
+      const vColor = e.verdict === 'pass' ? 'var(--green)' : 'var(--red)'
+      const results = (e.criteriaResults || []).map(cr =>
+        `<div style="padding-left:32px;color:${cr.result === 'pass' ? 'var(--green)' : 'var(--red)'}">  ${cr.result === 'pass' ? '&#10003;' : '&#10007;'} ${esc(cr.criterion.slice(0, 80))}</div>`
+      ).join('')
+      return `<div>[${time}] <span style="color:${vColor};font-weight:500">VERDICT: ${e.verdict.toUpperCase()}</span> ${esc(e.featureId)}</div>${results}`
+    }
+    case 'context_reset':
+      return `<div style="color:var(--yellow)">[${time}] ${eventIcon(e.type)} ${worker}CONTEXT RESET #${e.resetCount} for ${esc(e.featureId)} (${e.completedCount} done, ${e.remainingCount} remaining)</div>`
+    case 'dag_built':
+      return `<div style="color:var(--purple)">[${time}] ${eventIcon(e.type)} DAG: ${e.levels} levels, max parallelism ${e.maxParallelism}, critical path: ${(e.criticalPath || []).slice(0, 3).join(' → ')}${(e.criticalPath || []).length > 3 ? '...' : ''}</div>`
+    case 'batch_plan':
+      return `<div style="color:var(--text-dim)">[${time}] ${eventIcon(e.type)} BATCH: ${e.dispatching} dispatching (${e.ready} ready, ${e.inFlight} in-flight) — ${esc(e.reason || '')}</div>`
+    case 'feature_unblocked':
+      return `<div style="color:var(--green)">[${time}] ${eventIcon(e.type)} UNBLOCKED: ${esc(e.featureId)} (by ${esc(e.unblockedBy)})</div>`
+    case 'shutdown':
+      return `<div style="color:var(--red)">[${time}] ${eventIcon(e.type)} SHUTDOWN: ${esc(e.featureId)} — ${esc(e.reason)}</div>`
+    case 'init_failed':
+      return `<div style="color:var(--red)">[${time}] ${eventIcon(e.type)} INIT FAILED attempt ${e.attempt} (exit ${e.exitCode})</div>`
+    default:
+      return `<div style="color:var(--text-dim)">[${time}] ${e.type}${e.featureId ? ' ' + e.featureId : ''}</div>`
+  }
+}
+
+function filterActivityEvents(events) {
+  const typeFilter = document.getElementById('activity-filter').value
+  const featureFilter = document.getElementById('activity-feature-filter').value.trim().toLowerCase()
+
+  let filtered = events
+  if (typeFilter) {
+    const types = typeFilter.split(',')
+    filtered = filtered.filter(e => types.includes(e.type))
+  }
+  if (featureFilter) {
+    filtered = filtered.filter(e => (e.featureId || '').toLowerCase().includes(featureFilter))
+  }
+  return filtered
+}
+
+function renderActivityEvents(events) {
+  const filtered = filterActivityEvents(events)
+  const el = document.getElementById('activity-content')
+
+  // Summary
+  const summary = document.getElementById('activity-summary')
+  const total = events.length
+  const features = new Set(events.filter(e => e.featureId).map(e => e.featureId)).size
+  const passes = events.filter(e => e.type === 'feature_done' && e.verdict === 'pass').length
+  const fails = events.filter(e => e.type === 'feature_done' && e.verdict === 'fail').length
+  const resets = events.filter(e => e.type === 'context_reset').length
+  summary.innerHTML = `
+    <span><span class="num">${total}</span> events</span>
+    <span><span class="num">${features}</span> features</span>
+    <span style="color:var(--green)"><span class="num">${passes}</span> passed</span>
+    <span style="color:var(--red)"><span class="num">${fails}</span> failed</span>
+    ${resets > 0 ? `<span style="color:var(--yellow)"><span class="num">${resets}</span> resets</span>` : ''}
+  `
+
+  if (filtered.length === 0) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No events found. Run quest to generate activity data.</div>'
+    return
+  }
+
+  // Show most recent events first (reversed), limit to 500 for performance
+  const display = filtered.slice(-500).reverse()
+  el.innerHTML = '<div style="font-family:\'SF Mono\',Menlo,monospace;font-size:12px;line-height:1.8;padding:8px 0">' +
+    display.map(renderEventRow).join('') + '</div>'
+}
+
+function appendActivityEvents(newEvents) {
+  const el = document.getElementById('activity-content')
+  const container = el.querySelector('div')
+  if (!container) { renderActivityEvents(newEvents); return }
+
+  const filtered = filterActivityEvents(newEvents)
+  if (filtered.length === 0) return
+
+  // Prepend new events (newest first)
+  const html = filtered.reverse().map(renderEventRow).join('')
+  container.insertAdjacentHTML('afterbegin', html)
+
+  // Update summary counts
+  loadActivitySummary()
+}
+
+async function loadActivitySummary() {
+  try {
+    const res = await fetch('/api/events/stats')
+    const stats = await res.json()
+    const summary = document.getElementById('activity-summary')
+    summary.innerHTML = `<span><span class="num">${stats.total}</span> events</span>` +
+      (stats.byType || []).filter(t => ['feature_done', 'context_reset', 'agent_done'].includes(t.type))
+        .map(t => `<span><span class="num">${t.count}</span> ${t.type.replace('_', ' ')}</span>`).join('')
+  } catch { /* ignore */ }
+}
+
+async function loadActivityCost() {
+  const res = await fetch('/api/events')
+  const events = await res.json()
+  if (!Array.isArray(events)) return
+
+  // Calculate cost from agent_done events
+  const byAgent = {}
+  for (const e of events) {
+    if (e.type !== 'agent_done') continue
+    const key = e.agent || 'unknown'
+    if (!byAgent[key]) byAgent[key] = { agent: key, sessions: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, durationMs: 0 }
+    byAgent[key].sessions++
+    byAgent[key].inputTokens += e.inputTokens || 0
+    byAgent[key].outputTokens += e.outputTokens || 0
+    byAgent[key].cacheReadTokens += e.cacheReadTokens || 0
+    byAgent[key].durationMs += e.durationMs || 0
+  }
+
+  const el = document.getElementById('activity-content')
+  const rows = Object.values(byAgent)
+  if (rows.length === 0) { el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No agent data yet.</div>'; return }
+  el.innerHTML = `
+    <div class="list-row list-header" style="grid-template-columns: 100px 80px 120px 120px 120px 100px">
+      <div>Agent</div><div>Sessions</div><div>Input Tokens</div><div>Output Tokens</div><div>Cache Read</div><div>Duration</div>
+    </div>
+    ${rows.map(r => `
+      <div class="list-row" style="grid-template-columns: 100px 80px 120px 120px 120px 100px">
+        <div style="font-weight:500;color:${r.agent === 'coder' ? 'var(--accent)' : r.agent === 'eval' ? 'var(--purple)' : 'var(--text)'}">${r.agent}</div>
+        <div>${r.sessions}</div>
+        <div>${r.inputTokens.toLocaleString()}</div>
+        <div>${r.outputTokens.toLocaleString()}</div>
+        <div>${r.cacheReadTokens.toLocaleString()}</div>
+        <div>${fmtDuration(r.durationMs)}</div>
+      </div>
+    `).join('')}
   `
 }
 

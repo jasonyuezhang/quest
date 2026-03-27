@@ -5,10 +5,9 @@
  * all shared mutable state in a single directory (.quest/store/) that workers
  * access via absolute path rather than worktree-local copies.
  *
- * Shared state (lives in store):
- *   - features.json — feature definitions and pass/fail status
- *   - claude-progress.txt — orchestrator progress tracking
- *   - quest-events.jsonl — structured event log
+ * Shared state (lives in store, all SQLite):
+ *   - features.db — feature definitions, status, and attempt tracking
+ *   - events.db — structured event log + progress state
  *
  * Per-worker state (lives in worktree):
  *   - sprint-contract.json, current-feature.json, sprint-completion.json,
@@ -18,19 +17,12 @@
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
-  writeFileSync,
-  appendFileSync,
   copyFileSync,
-  openSync,
-  closeSync,
-  unlinkSync,
-  statSync,
-  constants,
 } from 'node:fs'
 import { join } from 'node:path'
 import type { Feature, FeaturesFile, ProgressState } from './agents/types.js'
 import { FeatureDB, rowToFeature } from './feature-db.js'
+import { EventDB } from './event-db.js'
 
 // ---------------------------------------------------------------------------
 // Store
@@ -40,6 +32,7 @@ export class QuestStore {
   readonly storeDir: string
   readonly mainDir: string
   private _featureDb: FeatureDB | null = null
+  private _eventDb: EventDB | null = null
 
   constructor(mainDir: string) {
     this.mainDir = mainDir
@@ -54,6 +47,14 @@ export class QuestStore {
     return this._featureDb
   }
 
+  /** Lazy-initialized event database (SQLite) */
+  get eventDb(): EventDB {
+    if (!this._eventDb) {
+      this._eventDb = new EventDB(this.mainDir)
+    }
+    return this._eventDb
+  }
+
   // ── Initialization & Migration ──────────────────────────────────────────
 
   /**
@@ -63,23 +64,27 @@ export class QuestStore {
   init(): void {
     mkdirSync(this.storeDir, { recursive: true })
 
-    // Migrate existing root-level files into the store (JSON copies for backward compat)
-    const migrations: Array<{ rootPath: string; storePath: string }> = [
-      { rootPath: this.rootFeaturesPath, storePath: this.featuresPath },
-      { rootPath: this.rootProgressPath, storePath: this.progressPath },
-      { rootPath: this.rootEventsPath, storePath: this.eventsPath },
-    ]
-
-    for (const { rootPath, storePath } of migrations) {
-      if (existsSync(rootPath) && !existsSync(storePath)) {
-        copyFileSync(rootPath, storePath)
-      }
+    // Migrate existing root-level features.json into the store (JSON copy for backward compat)
+    if (existsSync(this.rootFeaturesPath) && !existsSync(this.featuresPath)) {
+      copyFileSync(this.rootFeaturesPath, this.featuresPath)
     }
 
     // Migrate features into SQLite (the authoritative store)
     const imported = this.featureDb.migrateFromJson(this.mainDir)
     if (imported > 0) {
       console.log(`Migrated ${imported} features from features.json to SQLite (.quest/store/features.db)`)
+    }
+
+    // Migrate events from JSONL to SQLite
+    const eventsImported = this.eventDb.migrateFromJsonl(this.mainDir)
+    if (eventsImported > 0) {
+      console.log(`Migrated ${eventsImported} events from quest-events.jsonl to SQLite (.quest/store/events.db)`)
+    }
+
+    // Migrate progress from JSON file to SQLite
+    const progressMigrated = this.eventDb.migrateProgressFromJson(this.mainDir)
+    if (progressMigrated) {
+      console.log(`Migrated progress from claude-progress.txt to SQLite (.quest/store/events.db)`)
     }
   }
 
@@ -94,25 +99,13 @@ export class QuestStore {
     return join(this.storeDir, 'features.json')
   }
 
-  get progressPath(): string {
-    return join(this.storeDir, 'claude-progress.txt')
-  }
-
-  get eventsPath(): string {
-    return join(this.storeDir, 'quest-events.jsonl')
+  get eventsDbPath(): string {
+    return join(this.storeDir, 'events.db')
   }
 
   /** Root-level paths (for migration detection) */
   private get rootFeaturesPath(): string {
     return join(this.mainDir, 'features.json')
-  }
-
-  private get rootProgressPath(): string {
-    return join(this.mainDir, 'claude-progress.txt')
-  }
-
-  private get rootEventsPath(): string {
-    return join(this.mainDir, 'quest-events.jsonl')
   }
 
   // ── Features ────────────────────────────────────────────────────────────
@@ -154,15 +147,18 @@ export class QuestStore {
   // ── Progress ────────────────────────────────────────────────────────────
 
   readProgress(): ProgressState {
-    const path = this.resolveProgressPath()
-    const content = readFileSync(path, 'utf-8')
-    return JSON.parse(content) as ProgressState
+    this.ensureInit()
+    const data = this.eventDb.readProgress()
+    if (!data) {
+      throw new Error(`No progress state found in SQLite or files for: ${this.mainDir}`)
+    }
+    return data as unknown as ProgressState
   }
 
   writeProgress(state: ProgressState): void {
     this.ensureInit()
     const updated: ProgressState = { ...state, lastUpdated: new Date().toISOString() }
-    writeFileSync(this.progressPath, JSON.stringify(updated, null, 2) + '\n', 'utf-8')
+    this.eventDb.writeProgress(updated as unknown as Record<string, unknown>)
   }
 
   // ── Events ──────────────────────────────────────────────────────────────
@@ -170,77 +166,28 @@ export class QuestStore {
   /** Initialize a fresh event log for this run. */
   initEventLog(): void {
     this.ensureInit()
-    writeFileSync(this.eventsPath, '', 'utf-8')
+    this.eventDb.clearEvents()
   }
 
-  /** Append a structured event to the JSONL log. */
+  /** Append a structured event to the SQLite event log. */
   emitEvent(event: Record<string, unknown>): void {
-    const line = JSON.stringify({ ...event, ts: new Date().toISOString() }) + '\n'
+    const fullEvent = { ...event, ts: new Date().toISOString() }
     try {
-      appendFileSync(this.eventsPath, line, 'utf-8')
+      this.eventDb.emit(fullEvent)
     } catch {
       // Non-fatal
     }
   }
 
-  /** Read all events from the log. */
+  /** Read all events from the event log. */
   readEvents(): Array<Record<string, unknown>> {
-    const path = this.resolveEventsPath()
-    if (!existsSync(path)) return []
-    try {
-      return readFileSync(path, 'utf-8')
-        .split('\n')
-        .filter(Boolean)
-        .map(line => JSON.parse(line) as Record<string, unknown>)
-    } catch {
-      return []
-    }
+    return this.eventDb.readAll() as unknown as Array<Record<string, unknown>>
   }
 
-  /** Read new events starting at a byte offset. */
-  readNewEvents(fromOffset: number): { events: Array<Record<string, unknown>>; newOffset: number } {
-    const path = this.resolveEventsPath()
-    if (!existsSync(path)) return { events: [], newOffset: fromOffset }
-    try {
-      const content = readFileSync(path, 'utf-8')
-      if (content.length <= fromOffset) return { events: [], newOffset: fromOffset }
-      const newContent = content.slice(fromOffset)
-      const events = newContent
-        .split('\n')
-        .filter(Boolean)
-        .map(line => {
-          try { return JSON.parse(line) as Record<string, unknown> }
-          catch { return null }
-        })
-        .filter((e): e is Record<string, unknown> => e !== null)
-      return { events, newOffset: content.length }
-    } catch {
-      return { events: [], newOffset: fromOffset }
-    }
-  }
-
-  // ── File Resolution (store path with root fallback) ─────────────────────
-
-  /**
-   * Resolve features path: prefer store, fall back to repo root.
-   * This enables backward compatibility with projects that haven't migrated.
-   */
-  private resolveFeaturesPath(): string {
-    if (existsSync(this.featuresPath)) return this.featuresPath
-    if (existsSync(this.rootFeaturesPath)) return this.rootFeaturesPath
-    throw new Error(`features.json not found in store or project root: ${this.mainDir}`)
-  }
-
-  private resolveProgressPath(): string {
-    if (existsSync(this.progressPath)) return this.progressPath
-    if (existsSync(this.rootProgressPath)) return this.rootProgressPath
-    throw new Error(`claude-progress.txt not found in store or project root: ${this.mainDir}`)
-  }
-
-  private resolveEventsPath(): string {
-    if (existsSync(this.eventsPath)) return this.eventsPath
-    if (existsSync(this.rootEventsPath)) return this.rootEventsPath
-    return this.eventsPath // default to store path even if it doesn't exist yet
+  /** Read new events after a cursor position. */
+  readNewEvents(fromCursor: number): { events: Array<Record<string, unknown>>; newOffset: number } {
+    const { events, lastId } = this.eventDb.readAfter(fromCursor)
+    return { events: events as unknown as Array<Record<string, unknown>>, newOffset: lastId }
   }
 
   // ── Internal Helpers ────────────────────────────────────────────────────
@@ -248,62 +195,6 @@ export class QuestStore {
   private ensureInit(): void {
     if (!this.initialized) {
       this.init()
-    }
-  }
-
-  /**
-   * Simple file-based locking using O_CREAT | O_EXCL.
-   * Atomic on macOS (APFS/HFS+) and Linux (ext4/btrfs).
-   */
-  private withLock(fn: () => void): void {
-    const lockPath = join(this.storeDir, '.features.lock')
-    const maxWaitMs = 10_000
-    const retryIntervalMs = 50
-    const staleThresholdMs = 60_000
-    let acquired = false
-    const deadline = Date.now() + maxWaitMs
-
-    while (!acquired && Date.now() < deadline) {
-      try {
-        const fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY)
-        closeSync(fd)
-        acquired = true
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-          // Check for stale lock
-          try {
-            const { mtimeMs } = statSync(lockPath)
-            if (Date.now() - mtimeMs > staleThresholdMs) {
-              unlinkSync(lockPath)
-              continue
-            }
-          } catch {
-            // Can't check staleness, just wait
-          }
-
-          // Wait and retry
-          const waitTime = Math.min(retryIntervalMs, deadline - Date.now())
-          if (waitTime > 0) {
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitTime)
-          }
-        } else {
-          throw err
-        }
-      }
-    }
-
-    if (!acquired) {
-      throw new Error(`Failed to acquire lock on ${lockPath} after ${maxWaitMs}ms`)
-    }
-
-    try {
-      fn()
-    } finally {
-      try {
-        unlinkSync(lockPath)
-      } catch {
-        // Best-effort unlock
-      }
     }
   }
 }

@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FeatureDB, rowToFeature } from '../feature-db.js'
 import { TraceDB } from '../trace-db.js'
+import { EventDB } from '../event-db.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -116,6 +117,39 @@ export function startDashboard(projectDir: string, port: number): void {
     res.json({ ok: true })
   })
 
+  // ── Events API ───────────────────────────────────────────────────────
+
+  let evtDb: InstanceType<typeof EventDB> | null = null
+  try { evtDb = new EventDB(projectDir) } catch { /* no events db yet */ }
+
+  app.get('/api/events', (req, res) => {
+    if (!evtDb) return res.json([])
+    const afterId = parseInt(req.query.after as string, 10)
+    if (!isNaN(afterId) && afterId > 0) {
+      const { events, lastId } = evtDb.readAfter(afterId)
+      return res.json({ events, lastId })
+    }
+    // Default: return all events
+    const limit = parseInt(req.query.limit as string, 10)
+    const events = evtDb.readAll()
+    res.json(limit > 0 ? events.slice(-limit) : events)
+  })
+
+  app.get('/api/events/by-feature/:id', (req, res) => {
+    if (!evtDb) return res.json([])
+    res.json(evtDb.readByFeature(req.params.id))
+  })
+
+  app.get('/api/events/stats', (_req, res) => {
+    if (!evtDb) return res.json({ total: 0, byType: [] })
+    res.json({ total: evtDb.count(), byType: evtDb.countByType() })
+  })
+
+  app.get('/api/progress', (_req, res) => {
+    if (!evtDb) return res.json(null)
+    res.json(evtDb.readProgress())
+  })
+
   // ── Trace/Log API ──────────────────────────────────────────────────────
 
   let traceDb: InstanceType<typeof TraceDB> | null = null
@@ -178,6 +212,6 @@ export function startDashboard(projectDir: string, port: number): void {
   })
 
   // Cleanup on exit
-  process.on('SIGINT', () => { db.close(); traceDb?.close(); process.exit(0) })
-  process.on('SIGTERM', () => { db.close(); traceDb?.close(); process.exit(0) })
+  process.on('SIGINT', () => { db.close(); traceDb?.close(); evtDb?.close(); process.exit(0) })
+  process.on('SIGTERM', () => { db.close(); traceDb?.close(); evtDb?.close(); process.exit(0) })
 }

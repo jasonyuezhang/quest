@@ -757,27 +757,192 @@ program
   })
 
 /**
- * quest monitor [project-dir]
+ * quest add [project-dir]
  *
- * Live TUI dashboard showing agent activity and feature history.
- * Run in a separate terminal while `quest run` is executing.
- *
- * Historical runs: replays quest-events.jsonl from the project directory.
- * Live updates: polls quest-events.jsonl every 500ms for new events.
+ * Incrementally add a feature to the project without overwriting existing features.
+ * Adds directly to the SQLite feature database.
  */
 program
-  .command('monitor [project-dir]')
-  .description('Live TUI dashboard — shows agent activity, tool calls, and feature history')
-  .action(async (projectDirArg: string | undefined) => {
+  .command('add [project-dir]')
+  .description('Add a new feature to the project')
+  .requiredOption('--id <id>', 'Unique kebab-case feature ID')
+  .requiredOption('--name <name>', 'Human-readable feature name')
+  .requiredOption('--desc <description>', 'Feature description')
+  .option('--priority <priority>', 'Priority: high, medium, low', 'medium')
+  .option('--category <category>', 'Feature category', 'general')
+  .option('--criteria <criteria...>', 'Acceptance criteria (one per flag)')
+  .option('--depends-on <deps...>', 'Feature IDs this depends on')
+  .option('--browser-url <url>', 'URL for browser-based evaluation')
+  .action(async (projectDirArg: string | undefined, opts: {
+    id: string; name: string; desc: string; priority: string;
+    category: string; criteria?: string[]; dependsOn?: string[]; browserUrl?: string
+  }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { FeatureDB } = await import('./feature-db.js')
+    const db = new FeatureDB(projectDir)
+    db.migrateFromJson(projectDir)
 
-    if (!existsSync(projectDir)) {
-      console.error(chalk.red(`Directory does not exist: ${projectDir}`))
+    const existing = db.getFeature(opts.id)
+    if (existing) {
+      console.error(chalk.red(`Feature "${opts.id}" already exists.`))
+      db.close()
       process.exit(1)
     }
 
-    const { renderMonitor } = await import('./tui/monitor.js')
-    renderMonitor(projectDir)
+    if (!['high', 'medium', 'low'].includes(opts.priority)) {
+      console.error(chalk.red('Priority must be one of: high, medium, low'))
+      db.close()
+      process.exit(1)
+    }
+
+    db.addFeature({
+      id: opts.id,
+      name: opts.name,
+      description: opts.desc,
+      category: opts.category,
+      priority: opts.priority as 'high' | 'medium' | 'low',
+      acceptanceCriteria: opts.criteria ?? [],
+      dependsOn: opts.dependsOn,
+      browserTestUrl: opts.browserUrl,
+    })
+
+    console.log(chalk.green(`✓ Added feature: ${opts.id}`))
+    console.log(chalk.gray(`  Name: ${opts.name}`))
+    console.log(chalk.gray(`  Priority: ${opts.priority} | Category: ${opts.category}`))
+    if (opts.criteria?.length) console.log(chalk.gray(`  Criteria: ${opts.criteria.length}`))
+    if (opts.dependsOn?.length) console.log(chalk.gray(`  Depends on: ${opts.dependsOn.join(', ')}`))
+    db.close()
+  })
+
+/**
+ * quest replan [project-dir]
+ *
+ * Uses an LLM agent to re-analyze feature dependencies and reconstruct the DAG.
+ * Reads all features from SQLite, sends them to Claude for dependency analysis,
+ * then updates the dependsOn fields in the database.
+ */
+program
+  .command('replan [project-dir]')
+  .description('Re-analyze feature dependencies with an LLM agent to reconstruct the DAG')
+  .option('--dry-run', 'Show proposed changes without applying them')
+  .option('--model <model>', 'Model to use for analysis', 'claude-sonnet-4-6')
+  .action(async (projectDirArg: string | undefined, opts: { dryRun?: boolean; model?: string }) => {
+    const projectDir = resolve(projectDirArg ?? process.cwd())
+    const { FeatureDB, rowToFeature } = await import('./feature-db.js')
+    const db = new FeatureDB(projectDir)
+    db.migrateFromJson(projectDir)
+
+    const rows = db.listFeatures()
+    if (rows.length === 0) {
+      console.error(chalk.red('No features found. Run quest init first.'))
+      db.close()
+      process.exit(1)
+    }
+
+    const features = rows.map(rowToFeature)
+
+    console.log(chalk.blue(`Analyzing dependencies for ${features.length} features...`))
+
+    // Build the feature summary for the LLM
+    const featureSummary = features.map(f =>
+      `- ${f.id}: ${f.name}\n  ${f.description}\n  Criteria: ${f.acceptanceCriteria.join('; ')}\n  Current deps: ${f.dependsOn?.join(', ') || 'none'}`
+    ).join('\n\n')
+
+    const { query } = await import('@anthropic-ai/claude-agent-sdk')
+
+    const prompt = `Analyze these features and determine the optimal dependency ordering (dependsOn) for each one.
+
+Rules:
+- A feature should depend on another only if it MUST be built after it (shared code, schema, API needed)
+- Do NOT add dependencies for nice-to-have ordering — only strict build dependencies
+- Features with no dependencies should have an empty array
+- Keep the graph acyclic (no cycles)
+- Be conservative: fewer dependencies = more parallelism
+
+Features:
+${featureSummary}
+
+Respond with ONLY a JSON object mapping feature IDs to their dependsOn arrays:
+{"feature-id-1": [], "feature-id-2": ["feature-id-1"], ...}
+
+No other text, just the JSON.`
+
+    let responseText = ''
+    for await (const message of query({
+      prompt,
+      options: {
+        model: opts.model ?? 'claude-sonnet-4-6',
+        maxTurns: 1,
+        systemPrompt: 'You are a software architecture expert analyzing feature dependencies. Output only valid JSON.',
+      },
+    })) {
+      if (message.type === 'result' && !message.is_error) {
+        const msg = message as { result?: string }
+        responseText = msg.result ?? ''
+      }
+    }
+
+    // Parse the JSON response — try to extract JSON from markdown code blocks if present
+    let depMap: Record<string, string[]>
+    try {
+      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, responseText]
+      depMap = JSON.parse(jsonMatch[1]!.trim())
+    } catch {
+      console.error(chalk.red('Failed to parse LLM response as JSON:'))
+      console.error(responseText.slice(0, 500))
+      db.close()
+      process.exit(1)
+    }
+
+    // Show changes
+    let changeCount = 0
+    const changes: Array<{ id: string; oldDeps: string[]; newDeps: string[] }> = []
+
+    for (const feature of features) {
+      const newDeps = depMap[feature.id] ?? []
+      const oldDeps = feature.dependsOn ?? []
+      const oldSet = new Set(oldDeps)
+      const newSet = new Set(newDeps)
+      const added = newDeps.filter(d => !oldSet.has(d))
+      const removed = oldDeps.filter(d => !newSet.has(d))
+
+      if (added.length > 0 || removed.length > 0) {
+        changeCount++
+        changes.push({ id: feature.id, oldDeps, newDeps })
+        console.log(chalk.white(`  ${feature.id}:`))
+        for (const a of added) console.log(chalk.green(`    + ${a}`))
+        for (const r of removed) console.log(chalk.red(`    - ${r}`))
+      }
+    }
+
+    if (changeCount === 0) {
+      console.log(chalk.green('\nNo dependency changes needed.'))
+      db.close()
+      return
+    }
+
+    console.log(chalk.blue(`\n${changeCount} features with updated dependencies.`))
+
+    if (opts.dryRun) {
+      console.log(chalk.yellow('Dry run — no changes applied.'))
+      db.close()
+      return
+    }
+
+    // Apply changes
+    for (const { id, newDeps } of changes) {
+      db.updateFeature(id, { dependsOn: newDeps })
+    }
+
+    console.log(chalk.green(`✓ Updated ${changeCount} features.`))
+
+    // Show DAG summary
+    const { buildDAG, formatDAGSummary } = await import('./scheduler.js')
+    const updatedFeatures = db.listFeatures().map(rowToFeature)
+    const dag = buildDAG(updatedFeatures)
+    console.log(chalk.gray('\n' + formatDAGSummary(dag, dag.maxParallelism)))
+
+    db.close()
   })
 
 /**
@@ -1311,9 +1476,12 @@ program
       process.exit(1)
     }
 
-    const eventsPath = resolve(projectDir, 'quest-events.jsonl')
-    if (!existsSync(eventsPath)) {
-      console.error(chalk.red(`No quest-events.jsonl found in: ${projectDir}`))
+    // Check for events in SQLite or JSONL
+    const eventsDbPath = resolve(projectDir, '.quest', 'store', 'events.db')
+    const eventsJsonlPath = resolve(projectDir, 'quest-events.jsonl')
+    const storeJsonlPath = resolve(projectDir, '.quest', 'store', 'quest-events.jsonl')
+    if (!existsSync(eventsDbPath) && !existsSync(eventsJsonlPath) && !existsSync(storeJsonlPath)) {
+      console.error(chalk.red(`No event data found in: ${projectDir}`))
       console.error(chalk.gray('Run quest run first to generate event data.'))
       process.exit(1)
     }
