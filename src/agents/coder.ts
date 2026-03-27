@@ -3,6 +3,7 @@ import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
 import { TranscriptCapture } from '../transcript.js'
+import { withMemory, memoryPromptExtension } from '../memory.js'
 
 /**
  * System prompt for the coder (generator) agent.
@@ -157,15 +158,16 @@ export async function runCoderAgent(
   const model = options?.model ?? 'claude-sonnet-4-6'
   const tddMode = options?.tdd ?? false
 
-  const systemPrompt = tddMode
+  const basePrompt = tddMode
     ? CODER_SYSTEM_PROMPT + TDD_SYSTEM_PROMPT_EXTENSION
     : CODER_SYSTEM_PROMPT
+  const systemPrompt = basePrompt + memoryPromptExtension(featureId)
 
   const prompt = isContextReset && contextResetPrompt
     ? contextResetPrompt
     : `Implement feature: ${featureId}
 
-Follow your session startup protocol exactly (pwd, git log, read progress, read features, read sprint-contract, run init.sh), then implement the feature. Create sprint-completion.json when done.`
+Follow your session startup protocol exactly (pwd, git log, read current-feature.json, read sprint-contract, run init.sh), then implement the feature. Create sprint-completion.json when done.`
 
   let sessionId = 'unknown'
   let success = false
@@ -184,6 +186,7 @@ Follow your session startup protocol exactly (pwd, git log, read progress, read 
         allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
         model,
         maxTurns: 80,
+        mcpServers: withMemory() as Record<string, { command: string; args: string[] }>,
       },
     })) {
       logMessage('coder', message)

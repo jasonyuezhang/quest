@@ -4,6 +4,7 @@ import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
 import type { TraceSession } from '../trace.js'
 import { TranscriptCapture } from '../transcript.js'
+import { withMemory } from '../memory.js'
 
 /**
  * System prompt for the evaluator (verifier) agent.
@@ -207,12 +208,12 @@ Do NOT modify features.json — the orchestrator handles that.`
         allowedTools: ['Read', 'Write', 'Bash', 'Glob', 'Grep'],
         model,
         maxTurns: 60,
-        mcpServers: {
+        mcpServers: withMemory({
           playwright: {
             command: 'npx',
             args: ['@playwright/mcp@latest'],
           },
-        },
+        }) as Record<string, { command: string; args: string[] }>,
       },
     })) {
       logMessage('eval', message)
