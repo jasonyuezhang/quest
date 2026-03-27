@@ -142,8 +142,8 @@ export class Orchestrator {
       evaluatorModel: resolvedEvaluatorModel,
       reviewerModel: resolvedReviewerModel,
     }
-    this.tracer = new TraceDB(opts.projectDir)
     this.store = new QuestStore(opts.projectDir)
+    this.tracer = new TraceDB(opts.projectDir, this.store.db)
     this.agentGit = new AgentGit(opts.projectDir)
     this.pluginManager = new PluginManager(opts.projectDir)
   }

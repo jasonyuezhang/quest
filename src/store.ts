@@ -14,6 +14,7 @@
  *     eval-report.json, sprint-context-handoff.json
  */
 
+import Database from 'better-sqlite3'
 import {
   existsSync,
   mkdirSync,
@@ -23,6 +24,7 @@ import { join } from 'node:path'
 import type { Feature, FeaturesFile, ProgressState } from './agents/types.js'
 import { FeatureDB, rowToFeature } from './feature-db.js'
 import { EventDB } from './event-db.js'
+import { createQuestDB } from './quest-db.js'
 
 // ---------------------------------------------------------------------------
 // Store
@@ -31,6 +33,7 @@ import { EventDB } from './event-db.js'
 export class QuestStore {
   readonly storeDir: string
   readonly mainDir: string
+  private _db: Database.Database | null = null
   private _featureDb: FeatureDB | null = null
   private _eventDb: EventDB | null = null
 
@@ -39,18 +42,26 @@ export class QuestStore {
     this.storeDir = join(mainDir, '.quest', 'store')
   }
 
-  /** Lazy-initialized feature database (SQLite) */
+  /** Shared SQLite connection (lazy-initialized) */
+  get db(): Database.Database {
+    if (!this._db) {
+      this._db = createQuestDB(this.mainDir)
+    }
+    return this._db
+  }
+
+  /** Lazy-initialized feature database (SQLite) — shares the quest.db connection */
   get featureDb(): FeatureDB {
     if (!this._featureDb) {
-      this._featureDb = new FeatureDB(this.mainDir)
+      this._featureDb = new FeatureDB(this.mainDir, this.db)
     }
     return this._featureDb
   }
 
-  /** Lazy-initialized event database (SQLite) */
+  /** Lazy-initialized event database (SQLite) — shares the quest.db connection */
   get eventDb(): EventDB {
     if (!this._eventDb) {
-      this._eventDb = new EventDB(this.mainDir)
+      this._eventDb = new EventDB(this.mainDir, this.db)
     }
     return this._eventDb
   }

@@ -12,6 +12,7 @@ import Database from 'better-sqlite3'
 import { mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import type { QuestEvent } from './events.js'
+import { createQuestDB } from './quest-db.js'
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS events (
@@ -47,16 +48,16 @@ export interface EventRow {
 
 export class EventDB {
   private db: Database.Database
+  private ownsConnection: boolean
 
-  constructor(projectDir: string) {
-    const dbPath = join(projectDir, '.quest', 'store', 'events.db')
-    mkdirSync(dirname(dbPath), { recursive: true })
-
-    this.db = new Database(dbPath)
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('busy_timeout = 5000')
-    this.db.pragma('synchronous = NORMAL')
-    this.db.pragma('foreign_keys = ON')
+  constructor(projectDir: string, db?: Database.Database) {
+    if (db) {
+      this.db = db
+      this.ownsConnection = false
+    } else {
+      this.db = createQuestDB(projectDir)
+      this.ownsConnection = true
+    }
 
     this.db.exec(SCHEMA)
   }
@@ -282,6 +283,6 @@ export class EventDB {
   // ── Lifecycle ────────────────────────────────────────────────────────
 
   close(): void {
-    this.db.close()
+    if (this.ownsConnection) this.db.close()
   }
 }

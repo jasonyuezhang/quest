@@ -23,5 +23,10 @@ coverage/
 # OS files
 .DS_Store
 
+# Quest consolidated database
+.quest/store/quest.db
+.quest/store/quest.db-wal
+.quest/store/quest.db-shm
+
 # Claude Code worktrees
 .claude/worktrees/
