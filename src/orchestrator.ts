@@ -45,7 +45,7 @@ import {
   formatDAGSummary,
   type DAG,
 } from './scheduler.js'
-import { Tracer } from './trace.js'
+import { TraceDB, TraceSQLSession } from './trace-db.js'
 import { AgentGit } from './agent-git/index.js'
 import { TranscriptCapture } from './transcript.js'
 import { PluginManager } from './plugins.js'
@@ -101,7 +101,7 @@ class WorkerPool {
 
 export class Orchestrator {
   private opts: Required<Omit<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>> & Pick<OrchestratorOptions, 'coderModel' | 'evaluatorModel' | 'reviewerModel' | 'tdd' | 'webhookUrl' | 'notify'>
-  private tracer: Tracer
+  private tracer: TraceDB
   private agentGit: AgentGit
   readonly store: QuestStore
   readonly pluginManager: PluginManager
@@ -142,7 +142,7 @@ export class Orchestrator {
       evaluatorModel: resolvedEvaluatorModel,
       reviewerModel: resolvedReviewerModel,
     }
-    this.tracer = new Tracer(opts.projectDir)
+    this.tracer = new TraceDB(opts.projectDir)
     this.store = new QuestStore(opts.projectDir)
     this.agentGit = new AgentGit(opts.projectDir)
     this.pluginManager = new PluginManager(opts.projectDir)

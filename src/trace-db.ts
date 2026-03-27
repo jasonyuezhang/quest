@@ -123,9 +123,9 @@ export class TraceDB {
     })
   }
 
-  // ── Session lifecycle ───────────────────────────────────────────────────
+  // ── Session lifecycle (low-level DB ops, called by TraceSQLSession) ─────
 
-  startSession(opts: {
+  insertSession(opts: {
     sessionId: string
     agent: AgentLabel | 'planner'
     topic: string
@@ -148,7 +148,7 @@ export class TraceDB {
     })
   }
 
-  endSession(sessionId: string, stats: {
+  updateSession(sessionId: string, stats: {
     turns: number
     inputTokens: number
     outputTokens: number
@@ -162,6 +162,27 @@ export class TraceDB {
       output_tokens: stats.outputTokens,
       status: stats.status,
     })
+  }
+
+  // ── Convenience API (used by orchestrator) ────────────────────────────
+
+  /** Create a TraceSQLSession that auto-records to this database */
+  startSession(
+    agent: AgentLabel | 'planner',
+    topic: string,
+    opts?: { featureId?: string; workerId?: number; model?: string; systemPrompt?: string; userPrompt?: string },
+  ): TraceSQLSession {
+    return new TraceSQLSession(this, {
+      agent,
+      topic,
+      ...opts,
+      model: opts?.model ?? 'claude-sonnet-4-6',
+    })
+  }
+
+  /** End a TraceSQLSession */
+  endSession(session: TraceSQLSession | null | undefined): void {
+    session?.end()
   }
 
   // ── Event recording ─────────────────────────────────────────────────────
@@ -353,7 +374,7 @@ export class TraceSQLSession {
     this.sessionId = `${opts.agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     this.db = db
 
-    db.startSession({
+    db.insertSession({
       sessionId: this.sessionId,
       ...opts,
     })
@@ -519,7 +540,7 @@ export class TraceSQLSession {
     this.flush()
 
     try {
-      this.db.endSession(this.sessionId, {
+      this.db.updateSession(this.sessionId, {
         turns: this.turns,
         inputTokens: this.totalInput,
         outputTokens: this.totalOutput,

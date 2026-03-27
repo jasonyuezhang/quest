@@ -2,7 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount, setCurrentModel } from '../logger.js'
-import type { TraceSession } from '../trace.js'
+import type { TraceSQLSession } from '../trace-db.js'
 import { TranscriptCapture } from '../transcript.js'
 import { withMemory } from '../memory.js'
 
@@ -173,7 +173,7 @@ export async function runEvaluatorAgent(
   projectDir: string,
   featureId: string,
   contextManager: ContextManager,
-  traceSession?: TraceSession | null,
+  traceSession?: TraceSQLSession | null,
   options?: { noTranscripts?: boolean; model?: string; noEvidence?: boolean },
 ): Promise<AgentResult> {
   const startTime = Date.now()
@@ -217,7 +217,7 @@ Do NOT modify features.json — the orchestrator handles that.`
       },
     })) {
       logMessage('eval', message)
-      traceSession?.recordSDKMessage(message as Parameters<TraceSession['recordSDKMessage']>[0])
+      traceSession?.recordSDKMessage(message as Parameters<TraceSQLSession['recordSDKMessage']>[0])
       capture?.recordSDKMessage(message as Parameters<TranscriptCapture['recordSDKMessage']>[0])
       if (message.type === 'result') {
         sessionId = message.session_id ?? sessionId
