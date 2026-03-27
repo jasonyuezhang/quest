@@ -35,24 +35,111 @@ program
  *   - Pending features        → auto run
  *   - All features pass       → print status
  */
+/**
+ * Shared helper: build Orchestrator options from CLI flags.
+ * Used by both the default command and `quest run`.
+ */
+function buildOrchestratorOpts(projectDir: string, opts: Record<string, unknown>, envModel?: string) {
+  return {
+    projectDir,
+    maxFeatures: opts.maxFeatures as number,
+    retryLimit: opts.retryLimit as number,
+    maxConcurrency: opts.maxConcurrency as number,
+    maxContextResets: (opts.maxResets as number) ?? 5,
+    maxContextTokens: (opts.maxContext as number) ?? 200_000,
+    dryRun: opts.dryRun as boolean,
+    review: opts.review as boolean,
+    skipInit: opts.skipInit as boolean,
+    healthTimeout: (opts.healthTimeout as number) ?? 30,
+    noTranscripts: opts.noTranscripts as boolean,
+    skipRegression: opts.skipRegression as boolean,
+    tdd: opts.tdd as boolean,
+    noEvidence: opts.evidence === false,
+    coderModel: opts.coderModel as string | undefined,
+    evaluatorModel: opts.evaluatorModel as string | undefined,
+    webhookUrl: opts.webhook as string | undefined,
+    notify: opts.notify as string | undefined,
+    ciMode: opts.ci as boolean,
+    failFast: opts.failFast as boolean,
+    ...(envModel ? { model: envModel } : {}),
+  }
+}
+
 program
   .argument('[project-dir]', 'Project directory (default: cwd)')
   .option('-c, --max-concurrency <n>', 'Maximum parallel workers (scheduler auto-adjusts)', (v) => parseInt(v, 10), 4)
   .option('-n, --max-features <n>', 'Stop after N features', (v) => parseInt(v, 10), Infinity)
   .option('-r, --retry-limit <n>', 'Max retries per failed feature', (v) => parseInt(v, 10), 2)
-  .option('--plan', 'Use interactive planning for init (when auto-detected)')
+  .option('--max-resets <n>', 'Max context resets per feature before giving up', (v) => parseInt(v, 10), 5)
+  .option('--max-context <tokens>', 'Maximum context window tokens', (v) => parseInt(v, 10), 200_000)
+  .option('--plan', 'Use interactive planning for init (when project is uninitialized)')
   .option('-d, --description <description>', 'Project description for auto-init', '')
   .option('--dry-run', 'Print what would happen without running agents', false)
-  .action(async (projectDirArg: string | undefined, opts: {
-    maxConcurrency: number
-    maxFeatures: number
-    retryLimit: number
-    plan: boolean
-    description: string
-    dryRun: boolean
-  }) => {
-    const projectDir = resolve(projectDirArg ?? process.cwd())
+  .option('--review', 'Run code review between coder and evaluator', false)
+  .option('--tdd', 'Enable Test-Driven Development mode', false)
+  .option('--skip-init', 'Skip running init.sh', false)
+  .option('--no-transcripts', 'Disable session transcript capture', false)
+  .option('--skip-regression', 'Skip regression checks in evaluator', false)
+  .option('--no-evidence', 'Disable evidence capture', false)
+  .option('--coder-model <model>', 'Model for coder agent')
+  .option('--evaluator-model <model>', 'Model for evaluator agent')
+  .option('--webhook <url>', 'Send notifications to this URL')
+  .option('--notify <channel>', 'Notify channel (slack)')
+  .option('-q, --quiet', 'Show only high-level progress', false)
+  .option('--dashboard', 'Auto-launch web dashboard', false)
+  .option('--dashboard-port <port>', 'Dashboard port', (v) => parseInt(v, 10), 3700)
+  .option('-D, --detach', 'Run in background with dashboard in foreground', false)
+  .option('--ci', 'CI mode: structured output, exit codes', false)
+  .option('--fail-fast', 'Stop on first failure', false)
+  .action(async (projectDirArg: string | undefined, opts: Record<string, unknown>) => {
+    const projectDir = resolve((projectDirArg as string) ?? process.cwd())
     const state = await detectProjectState(projectDir)
+
+    // Detach mode
+    if (opts.detach) {
+      const { spawn } = await import('node:child_process')
+      const { openSync, mkdirSync, writeFileSync } = await import('node:fs')
+      const { join: pathJoin } = await import('node:path')
+
+      const logPath = pathJoin(projectDir, '.quest', 'run.log')
+      mkdirSync(pathJoin(projectDir, '.quest'), { recursive: true })
+      const logFd = openSync(logPath, 'a')
+
+      const args = process.argv.slice(2).filter(a => a !== '--detach' && a !== '-D')
+      if (!args.includes('--quiet') && !args.includes('-q')) args.push('--quiet')
+      if (!args.includes('--dashboard')) args.push('--dashboard')
+
+      const child = spawn(process.execPath, [process.argv[1], ...args], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        cwd: projectDir,
+      })
+      child.unref()
+
+      console.log(chalk.green(`Quest running in background (PID: ${child.pid})`))
+      console.log(chalk.gray(`  Log: ${logPath}`))
+      console.log(chalk.gray(`  Dashboard: http://localhost:${opts.dashboardPort}`))
+      console.log(chalk.gray(`  Stop: kill ${child.pid}`))
+
+      writeFileSync(pathJoin(projectDir, '.quest', 'run.pid'), String(child.pid), 'utf-8')
+      return
+    }
+
+    // Auto-launch dashboard
+    if (opts.dashboard) {
+      const { startDashboard } = await import('./dashboard/server.js')
+      startDashboard(projectDir, opts.dashboardPort as number)
+      const { exec: execCmd } = await import('node:child_process')
+      const url = `http://localhost:${opts.dashboardPort}`
+      if (process.platform === 'darwin') execCmd(`open ${url}`)
+      else if (process.platform === 'linux') execCmd(`xdg-open ${url}`)
+    }
+
+    // Set log verbosity
+    if (opts.quiet || opts.ci) {
+      const { setLogVerbosity } = await import('./logger.js')
+      setLogVerbosity('quiet')
+    }
 
     if (opts.dryRun) {
       console.log(chalk.gray(`[dry-run] Detected state: ${state.status}`))
@@ -65,6 +152,8 @@ program
       return
     }
 
+    const orchOpts = buildOrchestratorOpts(projectDir, opts, process.env.QUEST_MODEL)
+
     switch (state.status) {
       case 'uninitialized': {
         console.log(chalk.blue('No features.json found — initializing project...\n'))
@@ -73,7 +162,7 @@ program
 
         if (opts.plan) {
           const { runPlanningSession } = await import('./planner.js')
-          const plan = await runPlanningSession(opts.description || undefined)
+          const plan = await runPlanningSession((opts.description as string) || undefined)
           await orch.initialize(plan.featureGenerationContext, plan.projectName, plan)
         } else {
           await createBasicScaffold(projectDir, projectName)
@@ -81,17 +170,11 @@ program
           console.log(chalk.gray('  Created: init.sh, features.json, claude-progress.txt'))
         }
 
-        // After init, check if we should continue to run
+        // After init, continue to run
         const postInit = await detectProjectState(projectDir)
         if (postInit.status === 'pending') {
           console.log(chalk.blue('\nStarting feature implementation...\n'))
-          const runOrch = new Orchestrator({
-            projectDir,
-            maxFeatures: opts.maxFeatures,
-            retryLimit: opts.retryLimit,
-            maxConcurrency: opts.maxConcurrency,
-          })
-          await runOrch.run()
+          await new Orchestrator(orchOpts).run()
         }
         break
       }
@@ -101,26 +184,13 @@ program
           ? `Resuming interrupted feature: ${state.featureId} (context reset #${state.resetCount})`
           : `Resuming interrupted feature: ${state.featureId}`
         console.log(chalk.yellow(`${resumeMsg}\n`))
-
-        const orch = new Orchestrator({
-          projectDir,
-          maxFeatures: opts.maxFeatures,
-          retryLimit: opts.retryLimit,
-          maxConcurrency: opts.maxConcurrency,
-        })
-        await orch.resume()
+        await new Orchestrator(orchOpts).resume()
         break
       }
 
       case 'pending': {
         console.log(chalk.blue(`${state.passing}/${state.total} features passing — continuing...\n`))
-        const orch = new Orchestrator({
-          projectDir,
-          maxFeatures: opts.maxFeatures,
-          retryLimit: opts.retryLimit,
-          maxConcurrency: opts.maxConcurrency,
-        })
-        await orch.run()
+        await new Orchestrator(orchOpts).run()
         break
       }
 
