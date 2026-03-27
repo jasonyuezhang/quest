@@ -76,6 +76,10 @@ export function startDashboard(projectDir: string, port: number): void {
     res.json({ ok: true })
   })
 
+  app.get('/api/features/:id/attempts', (req, res) => {
+    res.json(db.getAttempts(req.params.id))
+  })
+
   app.put('/api/features/:id', (req, res) => {
     const existing = db.getFeature(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Feature not found' })

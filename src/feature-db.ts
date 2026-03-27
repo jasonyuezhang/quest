@@ -38,9 +38,31 @@ const SCHEMA = `
     value TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS attempts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id      TEXT NOT NULL,
+    attempt_num     INTEGER NOT NULL,
+    phase           TEXT NOT NULL,
+    worker_id       INTEGER,
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    verdict         TEXT,
+    failure_reason  TEXT,
+    failure_category TEXT,
+    eval_evidence   TEXT,
+    files_changed   TEXT,
+    commit_sha      TEXT,
+    input_tokens    INTEGER DEFAULT 0,
+    output_tokens   INTEGER DEFAULT 0,
+    context_resets  INTEGER DEFAULT 0,
+    turns           INTEGER DEFAULT 0,
+    FOREIGN KEY (feature_id) REFERENCES features(id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_features_priority ON features(priority);
   CREATE INDEX IF NOT EXISTS idx_features_passes ON features(passes);
   CREATE INDEX IF NOT EXISTS idx_features_category ON features(category);
+  CREATE INDEX IF NOT EXISTS idx_attempts_feature ON attempts(feature_id, attempt_num);
 `
 
 export class FeatureDB {
@@ -235,6 +257,97 @@ export class FeatureDB {
     return result.changes > 0
   }
 
+  // ── Attempt tracking ─────────────────────────────────────────────────
+
+  /**
+   * Record the start of a coder/evaluator attempt for a feature.
+   * Returns the attempt ID for later updates.
+   */
+  recordAttemptStart(featureId: string, attemptNum: number, phase: 'coder' | 'evaluator' | 'reviewer', workerId?: number): number {
+    const result = this.db.prepare(`
+      INSERT INTO attempts (feature_id, attempt_num, phase, worker_id, started_at)
+      VALUES (@feature_id, @attempt_num, @phase, @worker_id, @started_at)
+    `).run({
+      feature_id: featureId,
+      attempt_num: attemptNum,
+      phase,
+      worker_id: workerId ?? null,
+      started_at: Date.now(),
+    })
+    return Number(result.lastInsertRowid)
+  }
+
+  /**
+   * Record the outcome of an attempt.
+   */
+  recordAttemptEnd(attemptId: number, result: {
+    verdict?: 'pass' | 'fail'
+    failureReason?: string
+    failureCategory?: string
+    evalEvidence?: string
+    filesChanged?: string[]
+    commitSha?: string
+    inputTokens?: number
+    outputTokens?: number
+    contextResets?: number
+    turns?: number
+  }): void {
+    this.db.prepare(`
+      UPDATE attempts SET
+        ended_at = @ended_at,
+        verdict = @verdict,
+        failure_reason = @failure_reason,
+        failure_category = @failure_category,
+        eval_evidence = @eval_evidence,
+        files_changed = @files_changed,
+        commit_sha = @commit_sha,
+        input_tokens = @input_tokens,
+        output_tokens = @output_tokens,
+        context_resets = @context_resets,
+        turns = @turns
+      WHERE id = @id
+    `).run({
+      id: attemptId,
+      ended_at: Date.now(),
+      verdict: result.verdict ?? null,
+      failure_reason: result.failureReason ?? null,
+      failure_category: result.failureCategory ?? null,
+      eval_evidence: result.evalEvidence ?? null,
+      files_changed: result.filesChanged ? JSON.stringify(result.filesChanged) : null,
+      commit_sha: result.commitSha ?? null,
+      input_tokens: result.inputTokens ?? 0,
+      output_tokens: result.outputTokens ?? 0,
+      context_resets: result.contextResets ?? 0,
+      turns: result.turns ?? 0,
+    })
+  }
+
+  /**
+   * Get all attempts for a feature, ordered chronologically.
+   */
+  getAttempts(featureId: string): AttemptRow[] {
+    return this.db.prepare('SELECT * FROM attempts WHERE feature_id = ? ORDER BY started_at ASC')
+      .all(featureId) as AttemptRow[]
+  }
+
+  /**
+   * Get the latest failure evidence for a feature (used to inform the next attempt).
+   */
+  getLastFailure(featureId: string): AttemptRow | undefined {
+    return this.db.prepare(`
+      SELECT * FROM attempts
+      WHERE feature_id = ? AND verdict = 'fail'
+      ORDER BY started_at DESC LIMIT 1
+    `).get(featureId) as AttemptRow | undefined
+  }
+
+  /**
+   * Count total attempts across all runs for a feature.
+   */
+  totalAttempts(featureId: string): number {
+    return (this.db.prepare('SELECT COUNT(*) as c FROM attempts WHERE feature_id = ?').get(featureId) as { c: number }).c
+  }
+
   reorderFeatures(orderedIds: string[]): void {
     const update = this.db.prepare('UPDATE features SET sort_order = ? WHERE id = ?')
     const reorder = this.db.transaction((ids: string[]) => {
@@ -281,6 +394,26 @@ export interface FeatureRow {
   sort_order: number
   created_at: string
   updated_at: string
+}
+
+export interface AttemptRow {
+  id: number
+  feature_id: string
+  attempt_num: number
+  phase: string
+  worker_id: number | null
+  started_at: number
+  ended_at: number | null
+  verdict: string | null
+  failure_reason: string | null
+  failure_category: string | null
+  eval_evidence: string | null
+  files_changed: string | null
+  commit_sha: string | null
+  input_tokens: number
+  output_tokens: number
+  context_resets: number
+  turns: number
 }
 
 export interface FeatureUpdate {

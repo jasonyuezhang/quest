@@ -168,6 +168,10 @@
     <textarea id="f-criteria" rows="5" placeholder="Each line is one criterion"></textarea>
     <label>Depends On (comma-separated feature IDs)</label>
     <input id="f-deps" placeholder="e.g., feature-a, feature-b">
+    <div id="attempts-section" style="display:none;margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+      <label style="margin-top:0;font-weight:600">Attempt History</label>
+      <div id="attempts-list" style="font-size:12px;max-height:200px;overflow-y:auto;margin-top:8px"></div>
+    </div>
     <div class="modal-actions">
       <button class="danger" id="btn-delete" onclick="deleteFeature()" style="display:none">Delete</button>
       <div style="flex:1"></div>
@@ -223,6 +227,7 @@ function getFiltered() {
 }
 
 function render() {
+  syncToURL()
   if (view === 'board') renderBoard()
   else if (view === 'dag') renderDAG()
   else renderList()
@@ -323,6 +328,7 @@ function renderList() {
 
 function setView(v) {
   view = v
+  syncToURL()
   document.getElementById('board-view').style.display = v === 'board' ? 'flex' : 'none'
   document.getElementById('list-view').style.display = v === 'list' ? 'block' : 'none'
   document.getElementById('dag-view').style.display = v === 'dag' ? 'block' : 'none'
@@ -348,6 +354,39 @@ function openEditModal(id) {
   document.getElementById('f-deps').value = (f.dependsOn || []).join(', ')
   document.getElementById('btn-delete').style.display = 'inline-block'
   document.getElementById('modal').classList.add('open')
+
+  // Load attempt history
+  const attemptsEl = document.getElementById('attempts-list')
+  const attemptsSection = document.getElementById('attempts-section')
+  fetch(`/api/features/${id}/attempts`).then(r => r.json()).then(attempts => {
+    if (attempts.length === 0) {
+      attemptsSection.style.display = 'none'
+      return
+    }
+    attemptsSection.style.display = 'block'
+    attemptsEl.innerHTML = attempts.map(a => {
+      const dur = a.ended_at ? `${((a.ended_at - a.started_at) / 1000).toFixed(0)}s` : 'running'
+      const verdictColor = a.verdict === 'pass' ? 'var(--green)' : a.verdict === 'fail' ? 'var(--red)' : 'var(--text-muted)'
+      const worker = a.worker_id ? `W${a.worker_id}` : ''
+      const tokens = a.input_tokens ? `${a.input_tokens}↑ ${a.output_tokens}↓` : ''
+      const resets = a.context_resets ? `${a.context_resets} resets` : ''
+      const evidence = a.eval_evidence ? `<div style="margin-top:4px;padding:4px 8px;background:var(--bg);border-radius:4px;color:var(--text-muted);white-space:pre-wrap;max-height:80px;overflow-y:auto">${esc(a.eval_evidence.slice(0, 500))}</div>` : ''
+      const reason = a.failure_reason ? `<div style="color:var(--red);margin-top:2px">${esc(a.failure_reason.slice(0, 200))}</div>` : ''
+      return `
+        <div style="padding:8px;border:1px solid var(--border);border-radius:4px;margin-bottom:6px;background:var(--surface)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span><strong>#${a.attempt_num + 1}</strong> ${a.phase} ${worker}</span>
+            <span style="display:flex;gap:8px;align-items:center">
+              <span style="color:var(--text-dim)">${tokens} ${resets}</span>
+              <span style="color:var(--text-dim)">${dur}</span>
+              <span style="color:${verdictColor};font-weight:600">${a.verdict ?? '...'}</span>
+            </span>
+          </div>
+          ${reason}${evidence}
+        </div>
+      `
+    }).join('')
+  })
 }
 
 function openAddModal() {
@@ -411,6 +450,7 @@ let activeTab = 'features'
 
 function setTab(tab) {
   activeTab = tab
+  syncToURL()
   document.getElementById('tab-features').className = tab === 'features' ? 'active' : ''
   document.getElementById('tab-traces').className = tab === 'traces' ? 'active' : ''
   document.getElementById('features-toolbar').style.display = tab === 'features' ? 'contents' : 'none'
@@ -420,8 +460,39 @@ function setTab(tab) {
   if (tab === 'traces') loadTraces()
 }
 
-// Check hash on load
-if (location.hash === '#traces') setTimeout(() => setTab('traces'), 100)
+// ── URL state sync ────────────────────────────────────────────────────
+
+function syncToURL() {
+  const params = new URLSearchParams()
+  params.set('tab', activeTab)
+  if (activeTab === 'features') {
+    params.set('view', view)
+    const search = document.getElementById('search').value
+    const pri = document.getElementById('filter-priority').value
+    const cat = document.getElementById('filter-category').value
+    if (search) params.set('q', search)
+    if (pri) params.set('priority', pri)
+    if (cat) params.set('category', cat)
+  }
+  history.replaceState(null, '', '#' + params.toString())
+}
+
+function loadFromURL() {
+  const params = new URLSearchParams(location.hash.slice(1))
+  const tab = params.get('tab')
+  if (tab === 'traces' || tab === 'features') setTab(tab)
+  if (params.get('view')) setView(params.get('view'))
+  if (params.get('q')) document.getElementById('search').value = params.get('q')
+  if (params.get('priority')) document.getElementById('filter-priority').value = params.get('priority')
+  // category filter is populated async after load, so defer
+  setTimeout(() => {
+    if (params.get('category')) document.getElementById('filter-category').value = params.get('category')
+    render()
+  }, 200)
+}
+
+// Restore state from URL on load
+loadFromURL()
 
 // ── Traces ────────────────────────────────────────────────────────────
 

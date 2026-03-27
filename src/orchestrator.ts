@@ -1053,8 +1053,15 @@ export class Orchestrator {
     let lastFailureCategory: FailureCategory | undefined
     let retryHints: string | undefined
 
+    // Check for prior failure context to inform this run
+    const lastFailure = this.store.featureDb.getLastFailure(feature.id)
+    if (lastFailure?.failure_reason) {
+      retryHints = `Previous attempt failed: ${lastFailure.failure_reason}${lastFailure.eval_evidence ? `\nEvaluator evidence: ${lastFailure.eval_evidence.slice(0, 500)}` : ''}`
+    }
+
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const attemptLabel = attempt > 0 ? ` retry ${attempt}/${retryLimit}` : ''
+      const attemptId = this.store.featureDb.recordAttemptStart(feature.id, attempt, 'coder')
 
       if (attempt > 0) {
         console.log(chalk.yellow(`\n↻ Retry ${attempt}/${retryLimit} for ${feature.id}${lastFailureCategory ? ` [${lastFailureCategory}]` : ''}`))
@@ -1087,6 +1094,10 @@ export class Orchestrator {
       await this.pluginManager.onAgentDone({ projectDir, featureId: feature.id, agentType: 'coder', success: coderResult.success, durationMs: coderResult.durationMs })
       if (!coderResult.success) {
         console.log(chalk.red(`✗ Coder failed: ${coderResult.error}`))
+        this.store.featureDb.recordAttemptEnd(attemptId, {
+          verdict: 'fail', failureReason: coderResult.error, failureCategory: 'coder_error',
+          inputTokens: coderResult.totalInputTokens,
+        })
         continue
       }
 
@@ -1237,6 +1248,11 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
       }
 
       if (report.verdict === 'pass') {
+        this.store.featureDb.recordAttemptEnd(attemptId, {
+          verdict: 'pass', commitSha: await this.getCurrentSha() ?? undefined,
+          inputTokens: coderResult.totalInputTokens,
+        })
+
         // Checkpoint the passing state
         await this.agentGit.checkpoint({
           description: `${feature.id} passed evaluation`,
@@ -1273,8 +1289,19 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
         return { verdict: 'pass' }
       }
 
+      // Record failure with evaluator evidence
+      const failingCriteria = report.criteriaResults.filter(r => r.result === 'fail')
+      const evidence = failingCriteria.map(cr => `${cr.criterion}: ${cr.evidence}`).join('\n')
+      this.store.featureDb.recordAttemptEnd(attemptId, {
+        verdict: 'fail',
+        failureReason: report.notes,
+        failureCategory: lastFailureCategory,
+        evalEvidence: evidence,
+        inputTokens: coderResult.totalInputTokens,
+      })
+
       // Print failing criteria for visibility
-      for (const cr of report.criteriaResults.filter(r => r.result === 'fail')) {
+      for (const cr of failingCriteria) {
         console.log(chalk.red(`    ✗ ${cr.criterion}`))
         console.log(chalk.gray(`      ${cr.evidence}`))
       }
