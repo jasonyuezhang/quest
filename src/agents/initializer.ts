@@ -2,6 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentResult } from './types.js'
 import type { ContextManager } from '../context/manager.js'
 import { logMessage, resetTurnCount } from '../logger.js'
+import type { TraceSQLSession } from '../trace-db.js'
 
 /**
  * System prompt for the initializer agent.
@@ -98,6 +99,7 @@ export async function runInitializerAgent(
   projectDescription: string,
   projectName: string,
   contextManager: ContextManager,
+  traceSession?: TraceSQLSession | null,
 ): Promise<AgentResult> {
   const startTime = Date.now()
 
@@ -126,6 +128,7 @@ Create init.sh, features.json, and claude-progress.txt as described in your inst
       },
     })) {
       logMessage('init', message)
+      traceSession?.recordSDKMessage(message as Parameters<TraceSQLSession['recordSDKMessage']>[0])
       if (message.type === 'system' && message.subtype === 'init') {
         sessionId = (message as unknown as { session_id: string }).session_id ?? 'unknown'
       }
