@@ -11,8 +11,8 @@ const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-
 import { mkdir } from 'node:fs/promises'
 import { Orchestrator } from './orchestrator.js'
 import { createBasicScaffold } from './scaffold.js'
-import { readFeaturesFile, getNextFeature, countPassing } from './state/features.js'
-import { readProgress } from './state/progress.js'
+import { FeatureDB, rowToFeature } from './feature-db.js'
+import { EventDB } from './event-db.js'
 import { runCoderAgent } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
 import { ContextManager } from './context/manager.js'
@@ -397,11 +397,16 @@ program
 
     if (opts.ci) {
       // In CI mode: determine exit code from run outcome
-      const { readFeaturesFile: readFeatures } = await import('./state/features.js')
-      const featuresData = await readFeatures(projectDir).catch(() => null)
-      const anyFailed = featuresData
-        ? featuresData.features.some(f => !f.passes)
-        : false
+      let anyFailed = false
+      try {
+        const { FeatureDB: FDB } = await import('./feature-db.js')
+        const ciDb = new FDB(projectDir)
+        const ciStats = ciDb.stats()
+        anyFailed = ciStats.pending > 0 || ciStats.failed > 0
+        ciDb.close()
+      } catch {
+        anyFailed = true
+      }
 
       // Write GitHub Actions job summary if GITHUB_STEP_SUMMARY is set
       const summaryFile = process.env.GITHUB_STEP_SUMMARY
@@ -602,31 +607,34 @@ program
         return
       }
 
-      const featuresData = await readFeaturesFile(projectDir)
-      const progress = await readProgress(projectDir).catch(() => null)
-      const passing = countPassing(featuresData.features)
-      const total = featuresData.features.length
+      const fdb = new FeatureDB(projectDir)
+      const evtDb = new EventDB(projectDir)
+      const stats = fdb.stats()
+      const progress = evtDb.readProgress() as Record<string, unknown> | null
+      const { passing, total } = stats
       const pct = total > 0 ? Math.round((passing / total) * 100) : 0
 
-      console.log(chalk.bold(`\n${featuresData.projectName}`))
+      console.log(chalk.bold(`\n${fdb.getProjectName()}`))
       console.log(`Progress: ${chalk.green(passing)}/${chalk.white(total)} features (${pct}%)`)
 
       if (progress?.currentFeatureId) {
-        console.log(`Current:  ${chalk.yellow(progress.currentFeatureId)}`)
+        console.log(`Current:  ${chalk.yellow(progress.currentFeatureId as string)}`)
       }
       if (progress?.contextResets) {
-        console.log(`Resets:   ${progress.contextResets}`)
+        console.log(`Resets:   ${progress.contextResets as number}`)
       }
 
-      const pending = featuresData.features.filter(f => !f.passes)
-      const next = getNextFeature(featuresData.features)
+      const features = fdb.listFeatures({ passes: false }).map(rowToFeature)
+      const byPriority: Record<string, number> = { high: 0, medium: 1, low: 2 }
+      const next = [...features].sort((a, b) => (byPriority[a.priority] ?? 2) - (byPriority[b.priority] ?? 2))[0]
       if (next) {
         console.log(`\nNext up:  ${chalk.blue(next.id)} (${next.priority} priority)`)
         console.log(`          ${next.description}`)
       }
 
       // Show refined features section (features created by quest refine)
-      const refinedFeatures = featuresData.features.filter(f => f.refinedFrom !== undefined)
+      const allFeatures = fdb.listFeatures().map(rowToFeature)
+      const refinedFeatures = allFeatures.filter(f => f.refinedFrom !== undefined)
       if (refinedFeatures.length > 0) {
         console.log(`\nRefined (${refinedFeatures.length}):`)
         for (const f of refinedFeatures) {
@@ -642,23 +650,25 @@ program
 
       if (opts.showAll) {
         console.log('\nAll features:')
-        for (const f of featuresData.features) {
+        for (const f of allFeatures) {
           const icon = f.passes ? chalk.green('✓') : chalk.gray('○')
           const pri = f.priority === 'high' ? chalk.red(f.priority) : f.priority === 'medium' ? chalk.yellow(f.priority) : chalk.gray(f.priority)
           const refinedTag = f.refinedFrom ? chalk.gray(` [${f.refinedAction ?? 'refined'} from ${f.refinedFrom}]`) : ''
           console.log(`  ${icon} [${pri}] ${f.id}${refinedTag}`)
         }
-      } else if (pending.length > 0) {
-        console.log(`\nPending (${pending.length}):`)
-        for (const f of pending.slice(0, 10)) {
+      } else if (features.length > 0) {
+        console.log(`\nPending (${features.length}):`)
+        for (const f of features.slice(0, 10)) {
           const pri = f.priority === 'high' ? chalk.red(f.priority) : f.priority === 'medium' ? chalk.yellow(f.priority) : chalk.gray(f.priority)
           console.log(`  ○ [${pri}] ${f.id}`)
         }
-        if (pending.length > 10) {
-          console.log(chalk.gray(`  ... and ${pending.length - 10} more`))
+        if (features.length > 10) {
+          console.log(chalk.gray(`  ... and ${features.length - 10} more`))
         }
       }
       console.log()
+      fdb.close()
+      evtDb.close()
     } catch (err) {
       console.error(chalk.red('Status failed:'), err instanceof Error ? err.message : err)
       process.exit(1)
@@ -725,9 +735,11 @@ program
   .action(async (featureId: string, projectDirArg: string | undefined) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
-    // Write sprint contract from features.json
-    const featuresData = await readFeaturesFile(projectDir)
-    const feature = featuresData.features.find(f => f.id === featureId)
+    // Read feature from SQLite
+    const fdb = new FeatureDB(projectDir)
+    const featureRow = fdb.getFeature(featureId)
+    fdb.close()
+    const feature = featureRow ? rowToFeature(featureRow) : undefined
     if (!feature) {
       console.error(chalk.red(`Feature not found: ${featureId}`))
       process.exit(1)
@@ -778,7 +790,6 @@ program
     category: string; criteria?: string[]; dependsOn?: string[]; browserUrl?: string
   }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
-    const { FeatureDB } = await import('./feature-db.js')
     const db = new FeatureDB(projectDir)
     db.migrateFromJson(projectDir)
 
@@ -828,7 +839,6 @@ program
   .option('--model <model>', 'Model to use for analysis', 'claude-sonnet-4-6')
   .action(async (projectDirArg: string | undefined, opts: { dryRun?: boolean; model?: string }) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
-    const { FeatureDB, rowToFeature } = await import('./feature-db.js')
     const db = new FeatureDB(projectDir)
     db.migrateFromJson(projectDir)
 
@@ -949,7 +959,7 @@ No other text, just the JSON.`
  * quest traces [project-dir]
  *
  * List all recorded LLM sessions with their topics, agents, token usage, and timing.
- * Reads from SQLite database (.quest/traces.db).
+ * Reads from SQLite database (.quest/store/quest.db).
  */
 program
   .command('traces [project-dir]')
@@ -972,7 +982,7 @@ program
     try {
       db = new TraceDB(projectDir)
     } catch {
-      console.log(chalk.gray('No trace database found (.quest/traces.db).'))
+      console.log(chalk.gray('No trace database found (.quest/store/quest.db).'))
       console.log(chalk.gray('Traces are recorded automatically during quest run.'))
       return
     }
@@ -1203,7 +1213,7 @@ program
  * quest dashboard [project-dir]
  *
  * Launch a web-based Trello-like feature management board.
- * Features are stored in SQLite (.quest/features.db) for data consistency.
+ * Features are stored in SQLite (.quest/store/quest.db) for data consistency.
  */
 program
   .command('dashboard [project-dir]')
@@ -1467,7 +1477,7 @@ pluginCmd
  */
 program
   .command('retro [project-dir]')
-  .description('Generate an AI-powered sprint retrospective from quest-events.jsonl')
+  .description('Generate an AI-powered sprint retrospective from quest event data')
   .action(async (projectDirArg: string | undefined) => {
     const projectDir = resolve(projectDirArg ?? process.cwd())
 
@@ -1477,10 +1487,11 @@ program
     }
 
     // Check for events in SQLite or JSONL
-    const eventsDbPath = resolve(projectDir, '.quest', 'store', 'events.db')
+    const questDbPath = resolve(projectDir, '.quest', 'store', 'quest.db')
+    const legacyEventsDbPath = resolve(projectDir, '.quest', 'store', 'events.db')
     const eventsJsonlPath = resolve(projectDir, 'quest-events.jsonl')
     const storeJsonlPath = resolve(projectDir, '.quest', 'store', 'quest-events.jsonl')
-    if (!existsSync(eventsDbPath) && !existsSync(eventsJsonlPath) && !existsSync(storeJsonlPath)) {
+    if (!existsSync(questDbPath) && !existsSync(legacyEventsDbPath) && !existsSync(eventsJsonlPath) && !existsSync(storeJsonlPath)) {
       console.error(chalk.red(`No event data found in: ${projectDir}`))
       console.error(chalk.gray('Run quest run first to generate event data.'))
       process.exit(1)

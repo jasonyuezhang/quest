@@ -33,113 +33,82 @@ export function createQuestDB(projectDir: string): Database.Database {
 // Legacy migration — copies tables from old per-module .db files into quest.db
 // ---------------------------------------------------------------------------
 
+interface LegacyMigration {
+  path: string
+  alias: string
+  /** Table to check for existing data in quest.db (emptiness gate) */
+  checkTable: string
+  /** Tables to copy: { source: legacyTableName, target: questDbTableName } */
+  tables: Array<{ source: string; target: string }>
+}
+
 function migrateLegacyDatabases(db: Database.Database, projectDir: string): void {
-  const legacyFeatures = join(projectDir, '.quest', 'store', 'features.db')
-  const legacyEvents = join(projectDir, '.quest', 'store', 'events.db')
-  const legacyTraces = join(projectDir, '.quest', 'traces.db')
+  const migrations: LegacyMigration[] = [
+    {
+      path: join(projectDir, '.quest', 'store', 'features.db'),
+      alias: 'legacy_features',
+      checkTable: 'features',
+      tables: [
+        { source: 'features', target: 'features' },
+        { source: 'feature_meta', target: 'feature_meta' },
+        { source: 'attempts', target: 'attempts' },
+      ],
+    },
+    {
+      path: join(projectDir, '.quest', 'store', 'events.db'),
+      alias: 'legacy_events',
+      checkTable: 'events',
+      tables: [
+        { source: 'events', target: 'events' },
+        { source: 'progress', target: 'progress' },
+      ],
+    },
+    {
+      path: join(projectDir, '.quest', 'traces.db'),
+      alias: 'legacy_traces',
+      checkTable: 'sessions',
+      tables: [
+        { source: 'sessions', target: 'sessions' },
+        { source: 'events', target: 'trace_events' },
+      ],
+    },
+  ]
 
-  // Migrate features.db
-  if (existsSync(legacyFeatures)) {
-    try {
-      const hasData = (db.prepare(
-        "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='features'"
-      ).get() as { c: number }).c > 0
-
-      const isEmpty = !hasData || (db.prepare('SELECT COUNT(*) as c FROM features').get() as { c: number }).c === 0
-
-      if (isEmpty) {
-        db.exec(`ATTACH DATABASE '${legacyFeatures.replace(/'/g, "''")}' AS legacy_features`)
-        try {
-          // Copy each table if it exists in the legacy DB
-          const tables = db.prepare(
-            "SELECT name FROM legacy_features.sqlite_master WHERE type='table' AND name IN ('features', 'feature_meta', 'attempts')"
-          ).all() as Array<{ name: string }>
-
-          for (const { name } of tables) {
-            db.exec(`CREATE TABLE IF NOT EXISTS ${name} AS SELECT * FROM legacy_features.${name}`)
-          }
-        } finally {
-          db.exec('DETACH DATABASE legacy_features')
-        }
-        renameSync(legacyFeatures, legacyFeatures + '.migrated')
-        // Also rename WAL/SHM files if they exist
-        if (existsSync(legacyFeatures + '-wal')) renameSync(legacyFeatures + '-wal', legacyFeatures + '-wal.migrated')
-        if (existsSync(legacyFeatures + '-shm')) renameSync(legacyFeatures + '-shm', legacyFeatures + '-shm.migrated')
-      }
-    } catch {
-      // Non-fatal — legacy migration should never crash
-    }
+  for (const m of migrations) {
+    migrateLegacyDB(db, m)
   }
+}
 
-  // Migrate events.db
-  if (existsSync(legacyEvents)) {
+function migrateLegacyDB(db: Database.Database, m: LegacyMigration): void {
+  if (!existsSync(m.path)) return
+
+  try {
+    const hasTable = (db.prepare(
+      "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name=?"
+    ).get(m.checkTable) as { c: number }).c > 0
+
+    const isEmpty = !hasTable || (db.prepare(`SELECT COUNT(*) as c FROM ${m.checkTable}`).get() as { c: number }).c === 0
+    if (!isEmpty) return
+
+    db.exec(`ATTACH DATABASE '${m.path.replace(/'/g, "''")}' AS ${m.alias}`)
     try {
-      const hasData = (db.prepare(
-        "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='events'"
-      ).get() as { c: number }).c > 0
+      for (const { source, target } of m.tables) {
+        const exists = (db.prepare(
+          `SELECT COUNT(*) as c FROM ${m.alias}.sqlite_master WHERE type='table' AND name=?`
+        ).get(source) as { c: number }).c > 0
 
-      const isEmpty = !hasData || (db.prepare('SELECT COUNT(*) as c FROM events').get() as { c: number }).c === 0
-
-      if (isEmpty) {
-        db.exec(`ATTACH DATABASE '${legacyEvents.replace(/'/g, "''")}' AS legacy_events`)
-        try {
-          const tables = db.prepare(
-            "SELECT name FROM legacy_events.sqlite_master WHERE type='table' AND name IN ('events', 'progress')"
-          ).all() as Array<{ name: string }>
-
-          for (const { name } of tables) {
-            db.exec(`CREATE TABLE IF NOT EXISTS ${name} AS SELECT * FROM legacy_events.${name}`)
-          }
-        } finally {
-          db.exec('DETACH DATABASE legacy_events')
+        if (exists) {
+          db.exec(`CREATE TABLE IF NOT EXISTS ${target} AS SELECT * FROM ${m.alias}.${source}`)
         }
-        renameSync(legacyEvents, legacyEvents + '.migrated')
-        if (existsSync(legacyEvents + '-wal')) renameSync(legacyEvents + '-wal', legacyEvents + '-wal.migrated')
-        if (existsSync(legacyEvents + '-shm')) renameSync(legacyEvents + '-shm', legacyEvents + '-shm.migrated')
       }
-    } catch {
-      // Non-fatal
+    } finally {
+      db.exec(`DETACH DATABASE ${m.alias}`)
     }
-  }
 
-  // Migrate traces.db
-  if (existsSync(legacyTraces)) {
-    try {
-      const hasData = (db.prepare(
-        "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='sessions'"
-      ).get() as { c: number }).c > 0
-
-      const isEmpty = !hasData || (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c === 0
-
-      if (isEmpty) {
-        db.exec(`ATTACH DATABASE '${legacyTraces.replace(/'/g, "''")}' AS legacy_traces`)
-        try {
-          // Copy sessions as-is
-          const hasSessions = (db.prepare(
-            "SELECT COUNT(*) as c FROM legacy_traces.sqlite_master WHERE type='table' AND name='sessions'"
-          ).get() as { c: number }).c > 0
-
-          if (hasSessions) {
-            db.exec('CREATE TABLE IF NOT EXISTS sessions AS SELECT * FROM legacy_traces.sessions')
-          }
-
-          // Copy events as trace_events (rename to avoid collision)
-          const hasEvents = (db.prepare(
-            "SELECT COUNT(*) as c FROM legacy_traces.sqlite_master WHERE type='table' AND name='events'"
-          ).get() as { c: number }).c > 0
-
-          if (hasEvents) {
-            db.exec('CREATE TABLE IF NOT EXISTS trace_events AS SELECT * FROM legacy_traces.events')
-          }
-        } finally {
-          db.exec('DETACH DATABASE legacy_traces')
-        }
-        renameSync(legacyTraces, legacyTraces + '.migrated')
-        if (existsSync(legacyTraces + '-wal')) renameSync(legacyTraces + '-wal', legacyTraces + '-wal.migrated')
-        if (existsSync(legacyTraces + '-shm')) renameSync(legacyTraces + '-shm', legacyTraces + '-shm.migrated')
-      }
-    } catch {
-      // Non-fatal
-    }
+    renameSync(m.path, m.path + '.migrated')
+    if (existsSync(m.path + '-wal')) renameSync(m.path + '-wal', m.path + '-wal.migrated')
+    if (existsSync(m.path + '-shm')) renameSync(m.path + '-shm', m.path + '-shm.migrated')
+  } catch {
+    // Non-fatal — legacy migration should never crash
   }
 }

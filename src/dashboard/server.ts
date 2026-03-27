@@ -20,6 +20,8 @@ import { FeatureDB, rowToFeature } from '../feature-db.js'
 import { TraceDB } from '../trace-db.js'
 import { EventDB } from '../event-db.js'
 import { createQuestDB } from '../quest-db.js'
+import { readConfigFile, writeConfigFile } from '../config.js'
+import { FullCapture } from '../full-capture.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -202,6 +204,32 @@ export function startDashboard(projectDir: string, port: number): void {
   app.get('/api/traces/stats', (_req, res) => {
     if (!traceDb) return res.json({ sessions: 0, events: 0, dbSizeBytes: 0 })
     res.json(traceDb.stats())
+  })
+
+  // ── Config API ──────────────────────────────────────────────────────
+
+  app.get('/api/config', (_req, res) => {
+    res.json(readConfigFile(projectDir))
+  })
+
+  app.put('/api/config', async (req, res) => {
+    try {
+      const current = readConfigFile(projectDir)
+      const updated = { ...current, ...req.body }
+      await writeConfigFile(projectDir, updated)
+      res.json(updated)
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update config' })
+    }
+  })
+
+  // ── Full Capture API ───────────────────────────────────────────────
+
+  app.get('/api/full-capture/:sessionId', (req, res) => {
+    if (!FullCapture.exists(projectDir, req.params.sessionId)) {
+      return res.status(404).json({ error: 'No full capture data for this session' })
+    }
+    res.json(FullCapture.read(projectDir, req.params.sessionId))
   })
 
   // ── Start ─────────────────────────────────────────────────────────────

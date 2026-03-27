@@ -5,9 +5,10 @@
  * all shared mutable state in a single directory (.quest/store/) that workers
  * access via absolute path rather than worktree-local copies.
  *
- * Shared state (lives in store, all SQLite):
- *   - features.db — feature definitions, status, and attempt tracking
- *   - events.db — structured event log + progress state
+ * Shared state (lives in store, all SQLite via single quest.db):
+ *   - features, attempts, feature_meta — feature definitions, status, and attempt tracking
+ *   - events, progress — structured event log + progress state
+ *   - sessions, trace_events — LLM session traces
  *
  * Per-worker state (lives in worktree):
  *   - sprint-contract.json, current-feature.json, sprint-completion.json,
@@ -83,19 +84,19 @@ export class QuestStore {
     // Migrate features into SQLite (the authoritative store)
     const imported = this.featureDb.migrateFromJson(this.mainDir)
     if (imported > 0) {
-      console.log(`Migrated ${imported} features from features.json to SQLite (.quest/store/features.db)`)
+      console.log(`Migrated ${imported} features from features.json to SQLite (.quest/store/quest.db)`)
     }
 
     // Migrate events from JSONL to SQLite
     const eventsImported = this.eventDb.migrateFromJsonl(this.mainDir)
     if (eventsImported > 0) {
-      console.log(`Migrated ${eventsImported} events from quest-events.jsonl to SQLite (.quest/store/events.db)`)
+      console.log(`Migrated ${eventsImported} events from quest-events.jsonl to SQLite (.quest/store/quest.db)`)
     }
 
     // Migrate progress from JSON file to SQLite
     const progressMigrated = this.eventDb.migrateProgressFromJson(this.mainDir)
     if (progressMigrated) {
-      console.log(`Migrated progress from claude-progress.txt to SQLite (.quest/store/events.db)`)
+      console.log(`Migrated progress from claude-progress.txt to SQLite (.quest/store/quest.db)`)
     }
   }
 
@@ -110,8 +111,8 @@ export class QuestStore {
     return join(this.storeDir, 'features.json')
   }
 
-  get eventsDbPath(): string {
-    return join(this.storeDir, 'events.db')
+  get questDbPath(): string {
+    return join(this.storeDir, 'quest.db')
   }
 
   /** Root-level paths (for migration detection) */
@@ -133,13 +134,8 @@ export class QuestStore {
    * Atomically mark a feature as passing.
    * SQLite handles concurrency via WAL mode — no file locking needed.
    */
-  markFeaturePassing(featureId: string, sessionId: string): void {
+  markFeaturePassing(featureId: string, _sessionId: string): void {
     this.featureDb.updateFeature(featureId, { passes: true })
-    // Also set session_id via direct update
-    const row = this.featureDb.getFeature(featureId)
-    if (row) {
-      this.featureDb.updateFeature(featureId, { passes: true })
-    }
   }
 
   getNextFeature(): Feature | null {
@@ -157,19 +153,31 @@ export class QuestStore {
 
   // ── Progress ────────────────────────────────────────────────────────────
 
-  readProgress(): ProgressState {
+  readProgress(): ProgressState | null {
     this.ensureInit()
     const data = this.eventDb.readProgress()
-    if (!data) {
-      throw new Error(`No progress state found in SQLite or files for: ${this.mainDir}`)
-    }
-    return data as unknown as ProgressState
+    return (data as unknown as ProgressState) ?? null
   }
 
   writeProgress(state: ProgressState): void {
     this.ensureInit()
     const updated: ProgressState = { ...state, lastUpdated: new Date().toISOString() }
     this.eventDb.writeProgress(updated as unknown as Record<string, unknown>)
+  }
+
+  /** Create initial progress state for a new project. */
+  initProgress(projectName: string, totalFeatures: number): void {
+    this.ensureInit()
+    this.writeProgress({
+      projectName,
+      totalFeatures,
+      passedFeatures: 0,
+      currentFeatureId: null,
+      lastCommitSha: null,
+      lastSessionId: null,
+      lastUpdated: new Date().toISOString(),
+      contextResets: 0,
+    })
   }
 
   // ── Events ──────────────────────────────────────────────────────────────
@@ -199,6 +207,30 @@ export class QuestStore {
   readNewEvents(fromCursor: number): { events: Array<Record<string, unknown>>; newOffset: number } {
     const { events, lastId } = this.eventDb.readAfter(fromCursor)
     return { events: events as unknown as Array<Record<string, unknown>>, newOffset: lastId }
+  }
+
+  /**
+   * Import features from a FeaturesFile object into the database.
+   * Used by scaffold to persist generated features directly to SQLite.
+   */
+  importFeatures(data: FeaturesFile): number {
+    this.ensureInit()
+    const db = this.featureDb
+    db.setProjectName(data.projectName)
+    for (let i = 0; i < data.features.length; i++) {
+      const f = data.features[i]
+      db.addFeature({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        category: f.category,
+        priority: f.priority,
+        acceptanceCriteria: f.acceptanceCriteria,
+        dependsOn: f.dependsOn,
+        browserTestUrl: f.browserTestUrl,
+      })
+    }
+    return data.features.length
   }
 
   // ── Internal Helpers ────────────────────────────────────────────────────

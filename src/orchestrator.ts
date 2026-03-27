@@ -4,16 +4,14 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import chalk from 'chalk'
 
-import type { Feature, OrchestratorOptions, ProgressState, WorkerResult, ModelConfig } from './agents/types.js'
+import type { Feature, OrchestratorOptions, WorkerResult, ModelConfig } from './agents/types.js'
 import type { ProjectPlan } from './planner.js'
 import { runInitializerAgent } from './agents/initializer.js'
 import { runCoderAgent, ContextResetNeededError } from './agents/coder.js'
 import { runEvaluatorAgent } from './agents/evaluator.js'
 import { runReviewerAgent, readReviewReport } from './agents/reviewer.js'
 import { ContextManager } from './context/manager.js'
-// Features are read from SQLite via this.store (no more JSON file reads)
 import { QuestStore } from './store.js'
-import { readProgress, writeProgress, createInitialProgress } from './state/progress.js'
 import {
   buildSprintContract,
   writeSprintContract,
@@ -105,6 +103,7 @@ export class Orchestrator {
   private agentGit: AgentGit
   readonly store: QuestStore
   readonly pluginManager: PluginManager
+  private fullCapture: boolean
 
   /** Set to true when SIGINT/SIGTERM is received — stops dispatching new work */
   shutdownRequested = false
@@ -146,6 +145,25 @@ export class Orchestrator {
     this.tracer = new TraceDB(opts.projectDir, this.store.db)
     this.agentGit = new AgentGit(opts.projectDir)
     this.pluginManager = new PluginManager(opts.projectDir)
+
+    // Read fullCapture from config file
+    const configPath = join(opts.projectDir, '.quest', 'config.json')
+    let fc = false
+    try { fc = existsSync(configPath) && (JSON.parse(readFileSync(configPath, 'utf-8')) as { fullCapture?: boolean }).fullCapture === true } catch { /* ignore */ }
+    this.fullCapture = fc
+  }
+
+  /** Start a trace session with fullCapture config applied */
+  private startTrace(
+    agent: Parameters<TraceDB['startSession']>[0],
+    topic: string,
+    opts?: Parameters<TraceDB['startSession']>[2],
+  ): TraceSQLSession {
+    return this.startTrace(agent, topic, {
+      ...opts,
+      fullCapture: this.fullCapture,
+      projectDir: this.opts.projectDir,
+    })
   }
 
   /** Load model config from .quest/config.json */
@@ -239,11 +257,10 @@ export class Orchestrator {
 
     // Update progress: keep currentFeatureId set so `quest resume` knows where to restart
     try {
-      const progress = await readProgress(projectDir)
-      await writeProgress(projectDir, {
-        ...progress,
-        currentFeatureId: featureId,
-      })
+      const progress = this.store.readProgress()
+      if (progress) {
+        this.store.writeProgress({ ...progress, currentFeatureId: featureId })
+      }
     } catch {
       // Non-fatal
     }
@@ -366,7 +383,7 @@ export class Orchestrator {
     printAgentBanner('init', 1, 1, effectiveName)
 
     const ctxMgr = new ContextManager()
-    const traceSession = this.tracer.startSession('init', `Initialize ${effectiveName}`, {
+    const traceSession = this.startTrace('init', `Initialize ${effectiveName}`, {
       model: 'claude-sonnet-4-6', userPrompt: effectiveDescription,
     })
     const result = await runInitializerAgent(projectDir, effectiveDescription, effectiveName, ctxMgr)
@@ -881,7 +898,7 @@ export class Orchestrator {
         printAgentBanner('coder', 1, 2, `${feature.id}${attemptLabel}${resetLabel}`, wId)
         const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
         ctxMgr.setFeatureComplexity(feature.acceptanceCriteria.length)
-        const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${attemptLabel}${resetLabel}`, {
+        const coderTrace = this.startTrace('coder', `Implement ${feature.id}${attemptLabel}${resetLabel}`, {
           featureId: feature.id, workerId: wId, model: coderModel,
         })
         try {
@@ -906,7 +923,7 @@ export class Orchestrator {
       // Run evaluator in worktree
       printAgentBanner('eval', 2, 2, feature.id, wId)
       const evalCtx = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id, workerId: wId })
-      const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
+      const evalTrace = this.startTrace('eval', `Evaluate ${feature.id}`, {
         featureId: feature.id, workerId: wId, model: evaluatorModel,
       })
       const evalResult = await runEvaluatorAgent(worktreeDir, feature.id, evalCtx, evalTrace, { noTranscripts: this.opts.noTranscripts, model: evaluatorModel, noEvidence: this.opts.noEvidence })
@@ -984,13 +1001,9 @@ export class Orchestrator {
    * Resume from last known progress (reads claude-progress.txt).
    */
   async resume(): Promise<void> {
-    const { projectDir } = this.opts
-    let progress: ProgressState
-
-    try {
-      progress = await readProgress(projectDir)
-    } catch {
-      throw new Error('No claude-progress.txt found. Run quest init first.')
+    const progress = this.store.readProgress()
+    if (!progress) {
+      throw new Error('No progress state found. Run quest init first.')
     }
 
     console.log(
@@ -1029,13 +1042,12 @@ export class Orchestrator {
 
     // Update progress: mark this feature as in-progress
     try {
-      const progress = await readProgress(projectDir)
-      await writeProgress(projectDir, {
-        ...progress,
-        currentFeatureId: feature.id,
-      })
+      const progress = this.store.readProgress()
+      if (progress) {
+        this.store.writeProgress({ ...progress, currentFeatureId: feature.id })
+      }
     } catch {
-      // progress file may not exist yet
+      // progress may not exist yet
     }
 
     // ── Agent-Git: set up version control for this feature ───────────
@@ -1183,7 +1195,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
       // Step 3 (or 2): Run evaluator independently
       printAgentBanner('eval', totalSteps, totalSteps, feature.id)
       const ctxMgr = new ContextManager({ maxContextTokens: this.opts.maxContextTokens, featureId: feature.id })
-      const evalTrace = this.tracer.startSession('eval', `Evaluate ${feature.id}`, {
+      const evalTrace = this.startTrace('eval', `Evaluate ${feature.id}`, {
         featureId: feature.id, model: this.opts.evaluatorModel ?? this.opts.model,
       })
       const evalResult = await runEvaluatorAgent(projectDir, feature.id, ctxMgr, evalTrace, { noTranscripts: this.opts.noTranscripts, model: this.opts.evaluatorModel ?? this.opts.model, noEvidence: this.opts.noEvidence })
@@ -1268,20 +1280,21 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
 
         // Update progress
         try {
-          const progress = await readProgress(projectDir)
-          const featuresData = this.store.readFeatures()
-          const commitSha = await this.getCurrentSha()
-          const featureCommitShas = { ...(progress.featureCommitShas ?? {}) }
-          if (commitSha) {
-            featureCommitShas[feature.id] = commitSha
+          const progress = this.store.readProgress()
+          if (progress) {
+            const commitSha = await this.getCurrentSha()
+            const featureCommitShas = { ...(progress.featureCommitShas ?? {}) }
+            if (commitSha) {
+              featureCommitShas[feature.id] = commitSha
+            }
+            this.store.writeProgress({
+              ...progress,
+              passedFeatures: this.store.countPassing(),
+              currentFeatureId: null,
+              lastSessionId: evalResult.sessionId,
+              featureCommitShas,
+            })
           }
-          await writeProgress(projectDir, {
-            ...progress,
-            passedFeatures: this.store.countPassing(),
-            currentFeatureId: null,
-            lastSessionId: evalResult.sessionId,
-            featureCommitShas,
-          })
         } catch {
           // non-fatal
         }
@@ -1355,7 +1368,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
           emit({ type: 'context_reset', featureId: feature.id, resetCount, completedCount, remainingCount })
         }
 
-        const coderTrace = this.tracer.startSession('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
+        const coderTrace = this.startTrace('coder', `Implement ${feature.id}${isReset ? ` (reset #${resetCount})` : ''}`, {
           featureId: feature.id, model: this.opts.coderModel ?? this.opts.model,
         })
         await runCoderAgent(projectDir, feature.id, ctxMgr, isReset, resetPrompt ?? fixPrompt, { noTranscripts: this.opts.noTranscripts, tdd: this.opts.tdd, model: this.opts.coderModel ?? this.opts.model })
@@ -1463,7 +1476,10 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
     }
 
     // Load progress and find the commit SHA
-    const progress = await readProgress(projectDir)
+    const progress = this.store.readProgress()
+    if (!progress) {
+      throw new Error('No progress state found. Run quest init first.')
+    }
     const sha = progress.featureCommitShas?.[rollbackFeatureId]
     if (!sha) {
       throw new Error(`No commit SHA recorded for feature: ${rollbackFeatureId}`)
@@ -1502,7 +1518,7 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
     const updatedShas = { ...(progress.featureCommitShas ?? {}) }
     delete updatedShas[rollbackFeatureId]
 
-    await writeProgress(projectDir, {
+    this.store.writeProgress({
       ...progress,
       passedFeatures: this.store.countPassing(),
       featureCommitShas: updatedShas,
@@ -1510,9 +1526,8 @@ Read sprint-contract.json for the acceptance criteria, then fix ONLY these criti
   }
 
   async getStatus(): Promise<{ passing: number; total: number; currentFeature: string | null }> {
-    const { projectDir } = this.opts
     const featuresData = this.store.readFeatures()
-    const progress = await readProgress(projectDir).catch(() => null)
+    const progress = this.store.readProgress()
 
     return {
       passing: this.store.countPassing(),

@@ -8,11 +8,9 @@
  * The QuestStore and orchestrator read from here instead of JSON files.
  */
 
-import Database from 'better-sqlite3'
-import { mkdirSync, existsSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import type { Feature, FeaturesFile } from './agents/types.js'
-import { createQuestDB } from './quest-db.js'
+import { QuestDBBase, resolveStorePath } from './db-base.js'
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS features (
@@ -66,19 +64,9 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_attempts_feature ON attempts(feature_id, attempt_num);
 `
 
-export class FeatureDB {
-  private db: Database.Database
-  private ownsConnection: boolean
-
-  constructor(projectDir: string, db?: Database.Database) {
-    if (db) {
-      this.db = db
-      this.ownsConnection = false
-    } else {
-      this.db = createQuestDB(projectDir)
-      this.ownsConnection = true
-    }
-
+export class FeatureDB extends QuestDBBase {
+  constructor(projectDir: string, db?: import('better-sqlite3').Database) {
+    super(projectDir, db)
     this.db.exec(SCHEMA)
 
     // Add columns to existing databases (idempotent)
@@ -108,10 +96,7 @@ export class FeatureDB {
     const count = (this.db.prepare('SELECT COUNT(*) as c FROM features').get() as { c: number }).c
     if (count > 0) return 0
 
-    // Try store path first, then root
-    const storePath = join(projectDir, '.quest', 'store', 'features.json')
-    const rootPath = join(projectDir, 'features.json')
-    const jsonPath = existsSync(storePath) ? storePath : existsSync(rootPath) ? rootPath : null
+    const jsonPath = resolveStorePath(projectDir, 'features.json')
 
     if (!jsonPath) return 0
 
@@ -181,6 +166,10 @@ export class FeatureDB {
   getProjectName(): string {
     const row = this.db.prepare('SELECT value FROM feature_meta WHERE key = ?').get('projectName') as { value: string } | undefined
     return row?.value ?? 'quest'
+  }
+
+  setProjectName(name: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO feature_meta (key, value) VALUES (?, ?)').run('projectName', name)
   }
 
   stats(): { total: number; passing: number; pending: number; inProgress: number; failed: number; wontDo: number; categories: string[] } {
@@ -371,9 +360,6 @@ export class FeatureDB {
     }
   }
 
-  close(): void {
-    if (this.ownsConnection) this.db.close()
-  }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
