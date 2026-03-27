@@ -17,7 +17,7 @@ import chalk from 'chalk'
 import * as readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import type { Feature, FeaturesFile } from './agents/types.js'
-import { readFeaturesFile, writeFeaturesFile } from './state/features.js'
+import { FeatureDB, rowToFeature } from './feature-db.js'
 import { readEvents } from './events.js'
 
 // ---------------------------------------------------------------------------
@@ -358,7 +358,8 @@ export async function runRefinementSession(
   projectDir: string,
   opts: RefinementSessionOptions = {},
 ): Promise<void> {
-  const featuresData = await readFeaturesFile(projectDir)
+  const fdb = new FeatureDB(projectDir)
+  const featuresData = fdb.exportToJson()
   const failureCounts = opts.failureCounts ?? buildFailureMap(projectDir)
 
   const passingFeatures = featuresData.features.filter(f => f.passes)
@@ -455,7 +456,39 @@ Remember: never modify features where passes:true.`
     features: refinedFeatures,
     generatedAt: new Date().toISOString(),
   }
-  await writeFeaturesFile(projectDir, updatedData)
+  // Write refined features back to SQLite: clear and re-import
+  for (const f of refinedFeatures) {
+    const existing = fdb.getFeature(f.id)
+    if (existing) {
+      fdb.updateFeature(f.id, {
+        name: f.name,
+        description: f.description,
+        category: f.category,
+        priority: f.priority,
+        acceptanceCriteria: f.acceptanceCriteria,
+        dependsOn: f.dependsOn ?? [],
+      })
+    } else {
+      fdb.addFeature({
+        id: f.id,
+        name: f.name,
+        description: f.description,
+        category: f.category,
+        priority: f.priority,
+        acceptanceCriteria: f.acceptanceCriteria,
+        dependsOn: f.dependsOn,
+        refinedFrom: f.refinedFrom,
+        refinedAction: f.refinedAction,
+      })
+    }
+  }
+  // Delete features that were merged away
+  for (const existing of featuresData.features) {
+    if (!refinedFeatures.find(f => f.id === existing.id)) {
+      fdb.deleteFeature(existing.id)
+    }
+  }
+  fdb.close()
 
   const added = refinedFeatures.length - featuresData.features.length
   const addedStr = added > 0 ? `+${added}` : String(added)

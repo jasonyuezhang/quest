@@ -8,11 +8,9 @@
  * On first run, migrates existing quest-events.jsonl into the database.
  */
 
-import Database from 'better-sqlite3'
-import { mkdirSync, existsSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import type { QuestEvent } from './events.js'
-import { createQuestDB } from './quest-db.js'
+import { QuestDBBase, resolveStorePath } from './db-base.js'
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS events (
@@ -46,19 +44,9 @@ export interface EventRow {
   created_at: string
 }
 
-export class EventDB {
-  private db: Database.Database
-  private ownsConnection: boolean
-
-  constructor(projectDir: string, db?: Database.Database) {
-    if (db) {
-      this.db = db
-      this.ownsConnection = false
-    } else {
-      this.db = createQuestDB(projectDir)
-      this.ownsConnection = true
-    }
-
+export class EventDB extends QuestDBBase {
+  constructor(projectDir: string, db?: import('better-sqlite3').Database) {
+    super(projectDir, db)
     this.db.exec(SCHEMA)
   }
 
@@ -223,10 +211,7 @@ export class EventDB {
     const eventCount = this.count()
     if (eventCount > 0) return 0
 
-    // Try store path first, then root
-    const storePath = join(projectDir, '.quest', 'store', 'quest-events.jsonl')
-    const rootPath = join(projectDir, 'quest-events.jsonl')
-    const jsonlPath = existsSync(storePath) ? storePath : existsSync(rootPath) ? rootPath : null
+    const jsonlPath = resolveStorePath(projectDir, 'quest-events.jsonl')
 
     if (!jsonlPath) return 0
 
@@ -264,9 +249,7 @@ export class EventDB {
     const existing = this.readProgress()
     if (existing && Object.keys(existing).length > 0) return false
 
-    const storePath = join(projectDir, '.quest', 'store', 'claude-progress.txt')
-    const rootPath = join(projectDir, 'claude-progress.txt')
-    const jsonPath = existsSync(storePath) ? storePath : existsSync(rootPath) ? rootPath : null
+    const jsonPath = resolveStorePath(projectDir, 'claude-progress.txt')
 
     if (!jsonPath) return false
 
@@ -280,9 +263,4 @@ export class EventDB {
     }
   }
 
-  // ── Lifecycle ────────────────────────────────────────────────────────
-
-  close(): void {
-    if (this.ownsConnection) this.db.close()
-  }
 }

@@ -34,6 +34,8 @@ export interface QuestConfig {
   tddMode?: boolean
   /** Enable review mode by default */
   reviewMode?: boolean
+  /** Enable full (untruncated) LLM capture to disk */
+  fullCapture?: boolean
 }
 
 /** Sensible defaults for all config keys */
@@ -56,6 +58,7 @@ export const CONFIG_DEFAULTS: Required<Omit<QuestConfig, 'models' | 'browserTest
   webhookUrl: undefined,
   tddMode: false,
   reviewMode: false,
+  fullCapture: false,
 }
 
 /** Path to the config file for a given project directory */
@@ -138,6 +141,7 @@ export function mergeConfig(
     webhookUrl: cliOverrides.webhookUrl ?? fileConfig.webhookUrl ?? CONFIG_DEFAULTS.webhookUrl,
     tddMode: cliOverrides.tddMode ?? fileConfig.tddMode ?? CONFIG_DEFAULTS.tddMode,
     reviewMode: cliOverrides.reviewMode ?? fileConfig.reviewMode ?? CONFIG_DEFAULTS.reviewMode,
+    fullCapture: cliOverrides.fullCapture ?? fileConfig.fullCapture ?? CONFIG_DEFAULTS.fullCapture,
   }
 }
 
@@ -155,6 +159,7 @@ export const SETTABLE_KEYS = [
   'webhookUrl',
   'tddMode',
   'reviewMode',
+  'fullCapture',
 ] as const
 
 export type SettableKey = typeof SETTABLE_KEYS[number]
@@ -168,7 +173,7 @@ function parseValue(key: SettableKey, value: string): unknown {
     return n
   }
   // Boolean fields
-  if (['tddMode', 'reviewMode'].includes(key)) {
+  if (['tddMode', 'reviewMode', 'fullCapture'].includes(key)) {
     if (value === 'true') return true
     if (value === 'false') return false
     throw new Error(`Value for ${key} must be true or false, got: ${value}`)

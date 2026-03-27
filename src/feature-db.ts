@@ -8,11 +8,9 @@
  * The QuestStore and orchestrator read from here instead of JSON files.
  */
 
-import Database from 'better-sqlite3'
-import { mkdirSync, existsSync, readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import type { Feature, FeaturesFile } from './agents/types.js'
-import { createQuestDB } from './quest-db.js'
+import { QuestDBBase, resolveStorePath } from './db-base.js'
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS features (
@@ -66,24 +64,17 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_attempts_feature ON attempts(feature_id, attempt_num);
 `
 
-export class FeatureDB {
-  private db: Database.Database
-  private ownsConnection: boolean
-
-  constructor(projectDir: string, db?: Database.Database) {
-    if (db) {
-      this.db = db
-      this.ownsConnection = false
-    } else {
-      this.db = createQuestDB(projectDir)
-      this.ownsConnection = true
-    }
-
+export class FeatureDB extends QuestDBBase {
+  constructor(projectDir: string, db?: import('better-sqlite3').Database) {
+    super(projectDir, db)
     this.db.exec(SCHEMA)
 
     // Add columns to existing databases (idempotent)
+    // Add columns to existing databases (idempotent)
     try { this.db.exec("ALTER TABLE features ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'") } catch { /* already exists */ }
     try { this.db.exec('ALTER TABLE features ADD COLUMN worker_id INTEGER') } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE features ADD COLUMN refined_from TEXT') } catch { /* already exists */ }
+    try { this.db.exec("ALTER TABLE features ADD COLUMN refined_action TEXT") } catch { /* already exists */ }
     try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_features_status ON features(status)') } catch { /* ignore */ }
   }
 
@@ -108,10 +99,7 @@ export class FeatureDB {
     const count = (this.db.prepare('SELECT COUNT(*) as c FROM features').get() as { c: number }).c
     if (count > 0) return 0
 
-    // Try store path first, then root
-    const storePath = join(projectDir, '.quest', 'store', 'features.json')
-    const rootPath = join(projectDir, 'features.json')
-    const jsonPath = existsSync(storePath) ? storePath : existsSync(rootPath) ? rootPath : null
+    const jsonPath = resolveStorePath(projectDir, 'features.json')
 
     if (!jsonPath) return 0
 
@@ -183,6 +171,10 @@ export class FeatureDB {
     return row?.value ?? 'quest'
   }
 
+  setProjectName(name: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO feature_meta (key, value) VALUES (?, ?)').run('projectName', name)
+  }
+
   stats(): { total: number; passing: number; pending: number; inProgress: number; failed: number; wontDo: number; categories: string[] } {
     const total = (this.db.prepare('SELECT COUNT(*) as c FROM features').get() as { c: number }).c
     const passing = (this.db.prepare('SELECT COUNT(*) as c FROM features WHERE status = \'passed\'').get() as { c: number }).c
@@ -234,12 +226,13 @@ export class FeatureDB {
     id: string; name: string; description: string; category: string
     priority: 'high' | 'medium' | 'low'; acceptanceCriteria: string[]
     dependsOn?: string[]; browserTestUrl?: string
+    refinedFrom?: string; refinedAction?: string
   }): void {
     const maxOrder = (this.db.prepare('SELECT MAX(sort_order) as m FROM features').get() as { m: number | null }).m ?? -1
 
     this.db.prepare(`
-      INSERT INTO features (id, name, description, category, priority, acceptance_criteria, depends_on, browser_test_url, sort_order)
-      VALUES (@id, @name, @description, @category, @priority, @acceptance_criteria, @depends_on, @browser_test_url, @sort_order)
+      INSERT INTO features (id, name, description, category, priority, acceptance_criteria, depends_on, browser_test_url, refined_from, refined_action, sort_order)
+      VALUES (@id, @name, @description, @category, @priority, @acceptance_criteria, @depends_on, @browser_test_url, @refined_from, @refined_action, @sort_order)
     `).run({
       id: feature.id,
       name: feature.name,
@@ -249,6 +242,8 @@ export class FeatureDB {
       acceptance_criteria: JSON.stringify(feature.acceptanceCriteria),
       depends_on: feature.dependsOn ? JSON.stringify(feature.dependsOn) : null,
       browser_test_url: feature.browserTestUrl ?? null,
+      refined_from: feature.refinedFrom ?? null,
+      refined_action: feature.refinedAction ?? null,
       sort_order: maxOrder + 1,
     })
   }
@@ -371,9 +366,6 @@ export class FeatureDB {
     }
   }
 
-  close(): void {
-    if (this.ownsConnection) this.db.close()
-  }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -392,6 +384,8 @@ export interface FeatureRow {
   passes: number
   implemented_at: string | null
   session_id: string | null
+  refined_from: string | null
+  refined_action: string | null
   sort_order: number
   created_at: string
   updated_at: string
@@ -441,5 +435,7 @@ export function rowToFeature(row: FeatureRow): Feature {
     passes: row.passes === 1,
     implementedAt: row.implemented_at ?? undefined,
     sessionId: row.session_id ?? undefined,
+    refinedFrom: row.refined_from ?? undefined,
+    refinedAction: row.refined_action as 'split' | 'merge' | 'reorder' | undefined,
   }
 }

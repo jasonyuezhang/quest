@@ -1,7 +1,7 @@
 /**
  * Structured event log for the Quest harness.
  *
- * Events are stored in SQLite (events.db) for indexed queries and concurrent-safe writes.
+ * Events are stored in SQLite (quest.db) for indexed queries and concurrent-safe writes.
  * Falls back to JSONL append if the database is not initialized (e.g., during early init).
  *
  * The `quest dashboard` Activity tab reads events from the database.

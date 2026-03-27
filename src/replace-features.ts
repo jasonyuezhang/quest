@@ -2,10 +2,10 @@
 /**
  * Replace all features in SQLite with the contents of features.json
  */
-import Database from 'better-sqlite3'
-import { readFileSync, mkdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FeaturesFile, Feature } from './agents/types.js'
+import { createQuestDB } from './quest-db.js'
 
 const projectDir = process.argv[2] || process.cwd()
 const jsonPath = join(projectDir, 'features.json')
@@ -13,12 +13,23 @@ const jsonPath = join(projectDir, 'features.json')
 const data = JSON.parse(readFileSync(jsonPath, 'utf-8')) as FeaturesFile
 console.log(`Read ${data.features.length} features from features.json (project: ${data.projectName})`)
 
-const dbPath = join(projectDir, '.quest', 'store', 'features.db')
-mkdirSync(join(projectDir, '.quest', 'store'), { recursive: true })
+const db = createQuestDB(projectDir)
 
-const db = new Database(dbPath)
-db.pragma('journal_mode = WAL')
-db.pragma('busy_timeout = 5000')
+// Ensure schema exists
+db.exec(`
+  CREATE TABLE IF NOT EXISTS features (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+    category TEXT NOT NULL, priority TEXT NOT NULL, acceptance_criteria TEXT NOT NULL,
+    browser_test_url TEXT, depends_on TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    worker_id INTEGER, passes INTEGER NOT NULL DEFAULT 0,
+    implemented_at TEXT, session_id TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS feature_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+`)
 
 // Clear and re-insert
 db.exec('DELETE FROM features')
@@ -59,6 +70,6 @@ const cats = db.prepare('SELECT DISTINCT category FROM features ORDER BY categor
 
 console.log(`Imported ${count} features into SQLite`)
 console.log(`Categories: ${cats.map(c => c.category).join(', ')}`)
-console.log(`DB: ${dbPath}`)
+console.log(`DB: .quest/store/quest.db`)
 
 db.close()

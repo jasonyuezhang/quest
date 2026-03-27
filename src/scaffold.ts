@@ -9,8 +9,7 @@ import { writeFile, chmod, readFile, appendFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FeaturesFile, Feature } from './agents/types.js'
-import { createInitialProgress, writeProgress } from './state/progress.js'
-import { writeFeaturesFile } from './state/features.js'
+import { QuestStore } from './store.js'
 import { createDefaultConfig } from './config.js'
 
 const BASIC_INIT_SH = `#!/bin/bash
@@ -216,16 +215,18 @@ export async function createBasicScaffold(
 
   const initShPath = join(projectDir, 'init.sh')
 
+  // Write features and progress to SQLite (quest.db)
+  const store = new QuestStore(projectDir)
+  store.init()
+  store.importFeatures(featuresFile)
+  store.initProgress(projectName, features.length)
+
   await Promise.all([
     // 1. init.sh
     writeFile(initShPath, BASIC_INIT_SH, 'utf-8').then(() => chmod(initShPath, 0o755)),
-    // 2. features.json
-    writeFeaturesFile(projectDir, featuresFile),
-    // 3. claude-progress.txt
-    writeProgress(projectDir, createInitialProgress(projectName, features.length)),
-    // 4. .quest/config.json with sensible defaults
+    // 2. .quest/config.json with sensible defaults
     createDefaultConfig(projectDir),
-    // 5. Add .quest/ to .gitignore (creates if missing)
+    // 3. Add .quest/ to .gitignore (creates if missing)
     updateGitignore(projectDir),
   ])
 }

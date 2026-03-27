@@ -24,12 +24,21 @@
   .progress-bar { width: 120px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
   .progress-fill { height: 100%; background: var(--green); transition: width 0.3s; }
 
-  /* Toolbar */
-  .toolbar { padding: 12px 24px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--border); }
-  .toolbar button, .toolbar select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .toolbar button:hover { border-color: var(--accent); }
+  /* Tabs — primary navigation */
+  .tab-bar { padding: 0 24px; display: flex; gap: 0; border-bottom: 1px solid var(--border); }
+  .tab-bar button { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); padding: 12px 16px; cursor: pointer; font-size: 14px; font-weight: 500; transition: color 0.15s, border-color 0.15s; }
+  .tab-bar button:hover { color: var(--text); }
+  .tab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Toolbar — secondary controls per tab */
+  .toolbar { padding: 8px 24px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--border); background: var(--surface); min-height: 44px; }
+  .toolbar button, .toolbar select { background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .toolbar button:hover { border-color: var(--accent); color: var(--text); }
   .toolbar .active { background: var(--accent); color: #000; border-color: var(--accent); }
-  .search { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; flex: 1; max-width: 300px; font-size: 13px; }
+  .toolbar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+  .toolbar label { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .toolbar label input[type="checkbox"] { accent-color: var(--accent); }
+  .search { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 5px 10px; border-radius: 5px; flex: 1; max-width: 260px; font-size: 12px; }
   .search:focus { outline: none; border-color: var(--accent); }
 
   /* Board */
@@ -60,6 +69,8 @@
   .list-header { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; }
   .status-dot.pass { background: var(--green); }
+  .status-dot.fail { background: var(--red); }
+  .status-dot.in-progress { background: var(--accent); }
   .status-dot.pending { background: var(--border); }
 
   /* Modal */
@@ -96,51 +107,60 @@
   </div>
 </div>
 
-<div class="toolbar">
+<div class="tab-bar">
   <button id="tab-features" class="active" onclick="setTab('features')">Features</button>
   <button id="tab-traces" onclick="setTab('traces')">Traces</button>
   <button id="tab-activity" onclick="setTab('activity')">Activity</button>
-  <span id="features-toolbar" style="display:contents">
-    <button id="view-board" class="active" onclick="setView('board')">Board</button>
-    <button id="view-list" onclick="setView('list')">List</button>
-    <button id="view-dag" onclick="setView('dag')">DAG</button>
-    <input class="search" id="search" placeholder="Search features..." oninput="render()">
-    <select id="filter-priority" onchange="render()">
-      <option value="">All priorities</option>
-      <option value="high">High</option>
-      <option value="medium">Medium</option>
-      <option value="low">Low</option>
-    </select>
-    <select id="filter-category" onchange="render()"></select>
-    <button onclick="openAddModal()">+ Add Feature</button>
-  </span>
-  <span id="traces-toolbar" style="display:none">
-    <select id="trace-agent-filter" onchange="loadTraces()">
-      <option value="">All agents</option>
-      <option value="coder">Coder</option>
-      <option value="eval">Evaluator</option>
-      <option value="init">Initializer</option>
-    </select>
-    <input class="search" id="trace-search" placeholder="Search by file path..." onkeydown="if(event.key==='Enter')searchTraces()">
-    <button onclick="searchTraces()">Search</button>
-    <button onclick="loadCostByAgent()">Cost by Agent</button>
-    <button onclick="loadTopTools()">Top Tools</button>
-  </span>
-  <span id="activity-toolbar" style="display:none">
-    <select id="activity-filter" onchange="loadActivity()">
-      <option value="">All events</option>
-      <option value="feature_start,feature_done">Feature lifecycle</option>
-      <option value="agent_start,agent_done">Agent sessions</option>
-      <option value="tool_use">Tool calls</option>
-      <option value="eval_verdict">Verdicts</option>
-      <option value="context_reset">Context resets</option>
-      <option value="run_start,run_complete">Run lifecycle</option>
-    </select>
-    <input class="search" id="activity-feature-filter" placeholder="Filter by feature ID..." oninput="loadActivity()">
-    <button id="activity-auto" class="active" onclick="toggleAutoRefresh()">Auto-refresh</button>
-    <button onclick="loadActivity()">Refresh</button>
-    <button onclick="loadActivityCost()">Cost Summary</button>
-  </span>
+</div>
+
+<div class="toolbar" id="features-toolbar">
+  <button id="view-board" class="active" onclick="setView('board')">Board</button>
+  <button id="view-list" onclick="setView('list')">List</button>
+  <button id="view-dag" onclick="setView('dag')">DAG</button>
+  <div class="sep"></div>
+  <input class="search" id="search" placeholder="Search features..." oninput="render()">
+  <select id="filter-priority" onchange="render()">
+    <option value="">All priorities</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+  </select>
+  <select id="filter-category" onchange="render()"></select>
+  <div style="flex:1"></div>
+  <button onclick="openAddModal()">+ Add Feature</button>
+</div>
+
+<div class="toolbar" id="traces-toolbar" style="display:none">
+  <select id="trace-agent-filter" onchange="loadTraces()">
+    <option value="">All agents</option>
+    <option value="coder">Coder</option>
+    <option value="eval">Evaluator</option>
+    <option value="init">Initializer</option>
+  </select>
+  <input class="search" id="trace-search" placeholder="Search by file path..." onkeydown="if(event.key==='Enter')searchTraces()">
+  <button onclick="searchTraces()">Search</button>
+  <div class="sep"></div>
+  <button onclick="loadCostByAgent()">Cost by Agent</button>
+  <button onclick="loadTopTools()">Top Tools</button>
+  <div style="flex:1"></div>
+  <label><input type="checkbox" id="full-capture-toggle" onchange="toggleFullCapture(this.checked)"> Full Capture</label>
+</div>
+
+<div class="toolbar" id="activity-toolbar" style="display:none">
+  <select id="activity-filter" onchange="loadActivity()">
+    <option value="">All events</option>
+    <option value="feature_start,feature_done">Feature lifecycle</option>
+    <option value="agent_start,agent_done">Agent sessions</option>
+    <option value="tool_use">Tool calls</option>
+    <option value="eval_verdict">Verdicts</option>
+    <option value="context_reset">Context resets</option>
+    <option value="run_start,run_complete">Run lifecycle</option>
+  </select>
+  <input class="search" id="activity-feature-filter" placeholder="Filter by feature ID..." oninput="loadActivity()">
+  <div class="sep"></div>
+  <button id="activity-auto" class="active" onclick="toggleAutoRefresh()">Auto-refresh</button>
+  <button onclick="loadActivity()">Refresh</button>
+  <button onclick="loadActivityCost()">Cost Summary</button>
 </div>
 
 <div id="features-panel">
@@ -156,7 +176,10 @@
       <h2 id="trace-modal-title">Session Detail</h2>
       <div id="trace-meta" style="font-size:13px;color:var(--text-muted);margin-bottom:16px"></div>
       <div id="trace-events" style="font-family:'SF Mono',Menlo,monospace;font-size:12px;line-height:1.6;max-height:60vh;overflow-y:auto"></div>
-      <div class="modal-actions"><button onclick="closeTraceModal()">Close</button></div>
+      <div class="modal-actions">
+        <button id="full-capture-btn" style="display:none;background:rgba(188,140,255,0.15);color:var(--purple);border-color:var(--purple)">View Full Capture</button>
+        <button onclick="closeTraceModal()">Close</button>
+      </div>
     </div>
   </div>
 </div>
@@ -474,7 +497,7 @@ function setTab(tab) {
   for (const t of ['features', 'traces', 'activity']) {
     document.getElementById('tab-' + t).className = tab === t ? 'active' : ''
     const toolbar = document.getElementById(t + '-toolbar')
-    if (toolbar) toolbar.style.display = tab === t ? 'contents' : 'none'
+    if (toolbar) toolbar.style.display = tab === t ? 'flex' : 'none'
     document.getElementById(t + '-panel').style.display = tab === t ? 'block' : 'none'
   }
   if (tab === 'traces') loadTraces()
@@ -527,18 +550,25 @@ async function loadTraces() {
 
 function renderTraceSessions(sessions) {
   const el = document.getElementById('traces-content')
-  if (sessions.length === 0) {
-    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No trace sessions found. Run quest to generate traces.</div>'
+  // Filter to sessions with actual execution data (turns > 0 or completed/failed)
+  const active = sessions.filter(s => s.turns > 0 || s.ended_at || s.input_tokens > 0)
+  if (active.length === 0) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No trace sessions with execution history found. Run quest to generate traces.</div>'
     return
   }
+  sessions = active
   el.innerHTML = `
     <div class="list-row list-header" style="grid-template-columns: 32px 1fr 100px 80px 120px 100px">
       <div></div><div>Session</div><div>Agent</div><div>Turns</div><div>Tokens</div><div>Duration</div>
     </div>
     ${sessions.map(s => {
-      const dur = s.ended_at ? `${((s.ended_at - s.started_at) / 1000).toFixed(0)}s` : 'running'
-      const statusCls = s.status === 'completed' ? 'pass' : 'pending'
-      const agentColor = s.agent === 'coder' ? 'var(--accent)' : s.agent === 'eval' ? 'var(--purple)' : 'var(--text-muted)'
+      const endTs = s.ended_at || Date.now()
+      const durSec = (endTs - s.started_at) / 1000
+      const durStr = durSec < 60 ? `${durSec.toFixed(0)}s` : `${(durSec / 60).toFixed(1)}m`
+      const dur = s.ended_at ? durStr : `${durStr} ⏳`
+      const statusCls = s.status === 'completed' ? 'pass' : s.status === 'failed' ? 'fail' : s.status === 'running' ? 'in-progress' : 'pending'
+      const agentColor = s.agent === 'coder' ? 'var(--accent)' : s.agent === 'eval' ? 'var(--purple)' : s.agent === 'init' ? 'var(--green)' : 'var(--text-muted)'
+      const tokens = (s.input_tokens || s.output_tokens) ? `${s.input_tokens}↑ ${s.output_tokens}↓` : '—'
       return `
         <div class="list-row" style="grid-template-columns: 32px 1fr 100px 80px 120px 100px;cursor:pointer" onclick="openTraceSession('${s.session_id}')">
           <div><div class="status-dot ${statusCls}"></div></div>
@@ -547,13 +577,27 @@ function renderTraceSessions(sessions) {
             <div style="font-size:11px;color:var(--text-dim)">${s.session_id}${s.feature_id ? ' | ' + s.feature_id : ''}</div>
           </div>
           <div><span style="color:${agentColor}">${s.agent}</span></div>
-          <div>${s.turns}</div>
-          <div style="font-size:12px">${s.input_tokens}↑ ${s.output_tokens}↓</div>
+          <div>${s.turns || '—'}</div>
+          <div style="font-size:12px">${tokens}</div>
           <div>${dur}</div>
         </div>
       `
     }).join('')}
   `
+}
+
+// ── Full Capture toggle ─────────────────────────────────────────────
+async function initFullCaptureToggle() {
+  try {
+    const res = await fetch('/api/config')
+    const config = await res.json()
+    document.getElementById('full-capture-toggle').checked = !!config.fullCapture
+  } catch { /* ignore */ }
+}
+async function toggleFullCapture(enabled) {
+  try {
+    await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fullCapture: enabled }) })
+  } catch { /* ignore */ }
 }
 
 async function openTraceSession(sessionId) {
@@ -564,10 +608,14 @@ async function openTraceSession(sessionId) {
   const session = await sessionRes.json()
   const events = await eventsRes.json()
 
-  const dur = session.ended_at ? `${((session.ended_at - session.started_at) / 1000).toFixed(1)}s` : 'running'
+  const endTs = session.ended_at || Date.now()
+  const durSec = (endTs - session.started_at) / 1000
+  const durStr = durSec < 60 ? `${durSec.toFixed(1)}s` : `${(durSec / 60).toFixed(1)}m`
+  const dur = session.ended_at ? durStr : `${durStr} (still running)`
+  const tokens = (session.input_tokens || session.output_tokens) ? `${session.input_tokens}↑ ${session.output_tokens}↓` : 'no token data'
   document.getElementById('trace-modal-title').textContent = session.topic
   document.getElementById('trace-meta').innerHTML = `
-    <strong>${session.agent}</strong> | Model: ${session.model} | ${session.turns} turns | ${session.input_tokens}↑ ${session.output_tokens}↓ | ${dur} | ${session.status}
+    <strong>${session.agent}</strong> | Model: ${session.model} | ${session.turns || 0} turns | ${tokens} | ${dur} | ${session.status}
     ${session.feature_id ? `| Feature: ${session.feature_id}` : ''}
     ${session.worker_id ? `| Worker: W${session.worker_id}` : ''}
   `
@@ -598,7 +646,29 @@ async function openTraceSession(sessionId) {
   })
 
   document.getElementById('trace-events').innerHTML = lines.join('\n')
+
+  // Check for full-capture data and show button if available
+  const fcBtn = document.getElementById('full-capture-btn')
+  fcBtn.style.display = 'none'
+  fcBtn.onclick = () => showFullCapture(sessionId)
+  fetch(`/api/full-capture/${sessionId}`).then(r => {
+    if (r.ok) fcBtn.style.display = 'inline-block'
+  }).catch(() => {})
+
   document.getElementById('trace-modal').classList.add('open')
+}
+
+async function showFullCapture(sessionId) {
+  const res = await fetch(`/api/full-capture/${sessionId}`)
+  if (!res.ok) return
+  const entries = await res.json()
+  const el = document.getElementById('trace-events')
+  el.innerHTML = entries.map(e => {
+    const time = new Date(e.ts).toISOString().split('T')[1]?.split('.')[0] ?? ''
+    const typeColor = e.type === 'sdk_message' ? 'var(--accent)' : e.type === 'api_call' ? 'var(--purple)' : 'var(--text-dim)'
+    const contentStr = typeof e.content === 'string' ? e.content : JSON.stringify(e.content, null, 2)
+    return `<details><summary style="cursor:pointer;color:${typeColor}">[${time}] ${e.type}</summary><pre style="white-space:pre-wrap;word-break:break-word;color:var(--text-muted);padding:8px;margin:4px 0 12px;background:var(--bg);border-radius:4px;max-height:600px;overflow:auto">${esc(contentStr)}</pre></details>`
+  }).join('')
 }
 
 function closeTraceModal() {
@@ -1059,6 +1129,7 @@ document.getElementById('modal').addEventListener('click', e => { if (e.target =
 document.getElementById('trace-modal').addEventListener('click', e => { if (e.target === e.currentTarget) closeTraceModal() })
 
 load()
+initFullCaptureToggle()
 </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * One-time migration: features.json → SQLite (.quest/store/features.db)
+ * One-time migration: features.json → SQLite (.quest/store/quest.db)
  */
 import { QuestStore } from './store.js'
 
@@ -12,4 +12,4 @@ const data = store.readFeatures()
 console.log(`Features in SQLite: ${data.features.length}`)
 console.log(`Passing: ${data.features.filter(f => f.passes).length}`)
 console.log(`Pending: ${data.features.filter(f => !f.passes).length}`)
-console.log(`DB: .quest/store/features.db`)
+console.log(`DB: .quest/store/quest.db`)

@@ -1,7 +1,7 @@
 /**
  * SQLite-backed trace storage for LLM observability.
  *
- * Replaces JSONL trace files with a single .quest/traces.db that supports:
+ * SQLite-backed trace storage in the unified .quest/store/quest.db that supports:
  *   - Concurrent writes from parallel workers (WAL mode + busy timeout)
  *   - SQL queries across sessions ("all tool calls touching file X")
  *   - Token/cost aggregation by agent, model, feature
@@ -13,10 +13,9 @@
  */
 
 import Database from 'better-sqlite3'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
 import type { AgentLabel } from './logger.js'
-import { createQuestDB } from './quest-db.js'
+import { QuestDBBase } from './db-base.js'
+import { FullCapture } from './full-capture.js'
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -70,23 +69,15 @@ const SCHEMA = `
 // TraceDB
 // ---------------------------------------------------------------------------
 
-export class TraceDB {
-  private db: Database.Database
-  private ownsConnection: boolean
+export class TraceDB extends QuestDBBase {
   private insertEventStmt: Database.Statement
   private insertSessionStmt: Database.Statement
   private updateSessionStmt: Database.Statement
+  private flushSessionStatsStmt: Database.Statement
   private batchInsertEvents: Database.Transaction<(events: TraceEventRow[]) => void>
 
   constructor(projectDir: string, db?: Database.Database) {
-    if (db) {
-      this.db = db
-      this.ownsConnection = false
-    } else {
-      this.db = createQuestDB(projectDir)
-      this.ownsConnection = true
-    }
-
+    super(projectDir, db)
     this.db.exec(SCHEMA)
 
     // Prepared statements
@@ -104,6 +95,15 @@ export class TraceDB {
         input_tokens = @input_tokens,
         output_tokens = @output_tokens,
         status = @status
+      WHERE session_id = @session_id
+    `)
+
+    // Periodic stats flush (no ended_at or status change)
+    this.flushSessionStatsStmt = this.db.prepare(`
+      UPDATE sessions SET
+        turns = @turns,
+        input_tokens = @input_tokens,
+        output_tokens = @output_tokens
       WHERE session_id = @session_id
     `)
 
@@ -147,6 +147,20 @@ export class TraceDB {
     })
   }
 
+  /** Update session stats without ending it (used by periodic flush). */
+  flushSessionStats(sessionId: string, stats: {
+    turns: number
+    inputTokens: number
+    outputTokens: number
+  }): void {
+    this.flushSessionStatsStmt.run({
+      session_id: sessionId,
+      turns: stats.turns,
+      input_tokens: stats.inputTokens,
+      output_tokens: stats.outputTokens,
+    })
+  }
+
   updateSession(sessionId: string, stats: {
     turns: number
     inputTokens: number
@@ -169,7 +183,7 @@ export class TraceDB {
   startSession(
     agent: AgentLabel | 'planner',
     topic: string,
-    opts?: { featureId?: string; workerId?: number; model?: string; systemPrompt?: string; userPrompt?: string },
+    opts?: { featureId?: string; workerId?: number; model?: string; systemPrompt?: string; userPrompt?: string; fullCapture?: boolean; projectDir?: string },
   ): TraceSQLSession {
     return new TraceSQLSession(this, {
       agent,
@@ -303,9 +317,6 @@ export class TraceDB {
     return { sessions, events, dbSizeBytes: pageCount * pageSize }
   }
 
-  close(): void {
-    if (this.ownsConnection) this.db.close()
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -346,8 +357,6 @@ export interface TraceEventRow {
   is_error: number | null
 }
 
-/** @deprecated Use TraceEventRow instead */
-export type EventRow = TraceEventRow
 
 // ---------------------------------------------------------------------------
 // TraceSQLSession — per-agent session that buffers and flushes to DB
@@ -363,6 +372,7 @@ export class TraceSQLSession {
   private totalOutput = 0
   private ended = false
   private flushInterval: ReturnType<typeof setInterval>
+  private fc: FullCapture | null = null
 
   constructor(db: TraceDB, opts: {
     agent: AgentLabel | 'planner'
@@ -372,9 +382,15 @@ export class TraceSQLSession {
     model: string
     systemPrompt?: string
     userPrompt?: string
+    fullCapture?: boolean
+    projectDir?: string
   }) {
     this.sessionId = `${opts.agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     this.db = db
+
+    if (opts.fullCapture && opts.projectDir) {
+      this.fc = new FullCapture(opts.projectDir, this.sessionId)
+    }
 
     db.insertSession({
       sessionId: this.sessionId,
@@ -399,6 +415,7 @@ export class TraceSQLSession {
     modelUsage?: Record<string, { inputTokens: number; outputTokens: number; contextWindow?: number }>
   }): void {
     if (this.ended) return
+    this.fc?.recordSDKMessage(message)
     const now = Date.now()
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -499,6 +516,7 @@ export class TraceSQLSession {
     usage?: { inputTokens: number; outputTokens: number },
   ): void {
     if (this.ended) return
+    this.fc?.recordAPICall(role, content, usage)
 
     if (role === 'assistant') this.turns++
     if (usage) {
@@ -523,12 +541,19 @@ export class TraceSQLSession {
     })
   }
 
-  /** Flush buffered events to the database. */
+  /** Flush buffered events and session stats to the database. */
   flush(): void {
-    if (this.buffer.length === 0) return
     try {
-      this.db.insertEvents(this.buffer)
-      this.buffer = []
+      if (this.buffer.length > 0) {
+        this.db.insertEvents(this.buffer)
+        this.buffer = []
+      }
+      // Always update session stats so the dashboard shows live progress
+      this.db.flushSessionStats(this.sessionId, {
+        turns: this.turns,
+        inputTokens: this.totalInput,
+        outputTokens: this.totalOutput,
+      })
     } catch {
       // Non-fatal — trace writes should never crash the harness
     }
@@ -540,6 +565,7 @@ export class TraceSQLSession {
     this.ended = true
     clearInterval(this.flushInterval)
     this.flush()
+    this.fc?.end()
 
     try {
       this.db.updateSession(this.sessionId, {

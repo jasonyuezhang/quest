@@ -29,13 +29,14 @@ export type ProjectState =
  *   5. All features pass → complete (nothing to do)
  */
 export async function detectProjectState(projectDir: string): Promise<ProjectState> {
-  const featuresDbPath = join(projectDir, '.quest', 'store', 'features.db')
+  const questDbPath = join(projectDir, '.quest', 'store', 'quest.db')
+  const legacyFeaturesDbPath = join(projectDir, '.quest', 'store', 'features.db')
   const storeFeaturesPath = join(projectDir, '.quest', 'store', 'features.json')
   const featuresPath = join(projectDir, 'features.json')
   const handoffPath = join(projectDir, 'sprint-context-handoff.json')
 
   // Signal 1: Check if features exist (DB or JSON)
-  const hasDb = existsSync(featuresDbPath)
+  const hasDb = existsSync(questDbPath) || existsSync(legacyFeaturesDbPath)
   const hasJson = existsSync(storeFeaturesPath) || existsSync(featuresPath)
 
   if (!hasDb && !hasJson) {
@@ -73,8 +74,8 @@ export async function detectProjectState(projectDir: string): Promise<ProjectSta
   }
 
   // Signal 2: Check progress in SQLite (EventDB), fall back to JSON file
-  const eventsDbPath = join(projectDir, '.quest', 'store', 'events.db')
-  if (existsSync(eventsDbPath)) {
+  const legacyEventsDbPath = join(projectDir, '.quest', 'store', 'events.db')
+  if (existsSync(questDbPath) || existsSync(legacyEventsDbPath)) {
     try {
       const evtDb = new EventDB(projectDir)
       const progress = evtDb.readProgress() as ProgressState | null
