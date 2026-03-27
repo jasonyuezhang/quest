@@ -159,7 +159,7 @@ export class Orchestrator {
     topic: string,
     opts?: Parameters<TraceDB['startSession']>[2],
   ): TraceSQLSession {
-    return this.startTrace(agent, topic, {
+    return this.tracer.startSession(agent, topic, {
       ...opts,
       fullCapture: this.fullCapture,
       projectDir: this.opts.projectDir,

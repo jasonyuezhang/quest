@@ -402,7 +402,7 @@ program
         const { FeatureDB: FDB } = await import('./feature-db.js')
         const ciDb = new FDB(projectDir)
         const ciStats = ciDb.stats()
-        anyFailed = ciStats.pending > 0 || ciStats.failed > 0
+        anyFailed = ciStats.passing < ciStats.total
         ciDb.close()
       } catch {
         anyFailed = true

@@ -70,8 +70,11 @@ export class FeatureDB extends QuestDBBase {
     this.db.exec(SCHEMA)
 
     // Add columns to existing databases (idempotent)
+    // Add columns to existing databases (idempotent)
     try { this.db.exec("ALTER TABLE features ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'") } catch { /* already exists */ }
     try { this.db.exec('ALTER TABLE features ADD COLUMN worker_id INTEGER') } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE features ADD COLUMN refined_from TEXT') } catch { /* already exists */ }
+    try { this.db.exec("ALTER TABLE features ADD COLUMN refined_action TEXT") } catch { /* already exists */ }
     try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_features_status ON features(status)') } catch { /* ignore */ }
   }
 
@@ -223,12 +226,13 @@ export class FeatureDB extends QuestDBBase {
     id: string; name: string; description: string; category: string
     priority: 'high' | 'medium' | 'low'; acceptanceCriteria: string[]
     dependsOn?: string[]; browserTestUrl?: string
+    refinedFrom?: string; refinedAction?: string
   }): void {
     const maxOrder = (this.db.prepare('SELECT MAX(sort_order) as m FROM features').get() as { m: number | null }).m ?? -1
 
     this.db.prepare(`
-      INSERT INTO features (id, name, description, category, priority, acceptance_criteria, depends_on, browser_test_url, sort_order)
-      VALUES (@id, @name, @description, @category, @priority, @acceptance_criteria, @depends_on, @browser_test_url, @sort_order)
+      INSERT INTO features (id, name, description, category, priority, acceptance_criteria, depends_on, browser_test_url, refined_from, refined_action, sort_order)
+      VALUES (@id, @name, @description, @category, @priority, @acceptance_criteria, @depends_on, @browser_test_url, @refined_from, @refined_action, @sort_order)
     `).run({
       id: feature.id,
       name: feature.name,
@@ -238,6 +242,8 @@ export class FeatureDB extends QuestDBBase {
       acceptance_criteria: JSON.stringify(feature.acceptanceCriteria),
       depends_on: feature.dependsOn ? JSON.stringify(feature.dependsOn) : null,
       browser_test_url: feature.browserTestUrl ?? null,
+      refined_from: feature.refinedFrom ?? null,
+      refined_action: feature.refinedAction ?? null,
       sort_order: maxOrder + 1,
     })
   }
@@ -378,6 +384,8 @@ export interface FeatureRow {
   passes: number
   implemented_at: string | null
   session_id: string | null
+  refined_from: string | null
+  refined_action: string | null
   sort_order: number
   created_at: string
   updated_at: string
@@ -427,5 +435,7 @@ export function rowToFeature(row: FeatureRow): Feature {
     passes: row.passes === 1,
     implementedAt: row.implemented_at ?? undefined,
     sessionId: row.session_id ?? undefined,
+    refinedFrom: row.refined_from ?? undefined,
+    refinedAction: row.refined_action as 'split' | 'merge' | 'reorder' | undefined,
   }
 }

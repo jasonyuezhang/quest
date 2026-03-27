@@ -477,6 +477,8 @@ Remember: never modify features where passes:true.`
         priority: f.priority,
         acceptanceCriteria: f.acceptanceCriteria,
         dependsOn: f.dependsOn,
+        refinedFrom: f.refinedFrom,
+        refinedAction: f.refinedAction,
       })
     }
   }
