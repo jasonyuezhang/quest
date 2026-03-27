@@ -1,6 +1,6 @@
 {
   "name": "quest",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Coding agent harness following Anthropic engineering best practices",
   "type": "module",
   "bin": {
